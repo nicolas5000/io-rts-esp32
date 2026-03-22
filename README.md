@@ -1,5 +1,5 @@
 # io-rts-esp32
-IO-Homecontrol 2W (2-Way, with device feedback) protocol and legacy RTS protocol implementation on ESP32-S3 hardware based on ESP-IDF SDK
+IO-Homecontrol 2W (2-Way, with device feedback) protocol and legacy RTS protocol implementation on ESP32-S3 hardware based on ESP-IDF SDK version 6.0.0
 
 ### Acknowledgment
 

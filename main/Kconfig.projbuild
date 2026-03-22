@@ -16,13 +16,13 @@ menu "IO RTS Project Configuration"
 
         config IOHOMECONTROL_DEFAULT_KEY
             string "IO System key (16 bytes)"
-            default 00112233445566778899AABBCCDDEEFF
+            default "00112233445566778899AABBCCDDEEFF"
             help
                 Default system key if not changed by configuration later (16 bytes)
         
         config IOHOMECONTROL_DEFAULT_NODEID
             string "IO Node ID (3 bytes)"
-            default 112233
+            default "112233"
             help
                 Default Node ID if not changed by configuration later (3 bytes)
 

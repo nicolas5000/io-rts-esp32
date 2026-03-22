@@ -6,7 +6,12 @@
 
 #include "iohome_crypto.h"
 #include <string.h>
-#include <mbedtls/aes.h>
+
+// https://mbed-tls.readthedocs.io/en/latest/getting_started/psa/
+#include "psa/crypto.h"
+
+#include "esp_log.h"
+static const char *TAG = "io-crypto";
 
 namespace iohome
 {
@@ -49,9 +54,10 @@ namespace iohome
     void generate_challenge(uint8_t challenge_out[HMAC_SIZE])
     {
       // Generate random 6-byte challenge
-      for (int i = 0; i < HMAC_SIZE; i++)
+      psa_status_t status = psa_generate_random(challenge_out, HMAC_SIZE);
+      if (status != PSA_SUCCESS)
       {
-        challenge_out[i] = rand() % 256; // random byte
+        ESP_LOGE(TAG, "generate_challenge - Failed to generate random! (%d)", status);
       }
     }
 
@@ -101,20 +107,32 @@ namespace iohome
         const uint8_t key[AES_KEY_SIZE],
         uint8_t output[AES_BLOCK_SIZE])
     {
-      mbedtls_aes_context aes;
-      mbedtls_aes_init(&aes);
-
-      int ret = mbedtls_aes_setkey_enc(&aes, key, 128);
-      if (ret != 0)
+      psa_status_t status;
+      psa_key_attributes_t attributes = PSA_KEY_ATTRIBUTES_INIT;
+      psa_algorithm_t alg = PSA_ALG_ECB_NO_PADDING;
+      size_t output_length = 0;
+      psa_key_id_t key_id;
+      // Import key
+      psa_set_key_usage_flags(&attributes, PSA_KEY_USAGE_ENCRYPT);
+      psa_set_key_algorithm(&attributes, alg);
+      psa_set_key_type(&attributes, PSA_KEY_TYPE_AES);
+      psa_set_key_bits(&attributes, 8 * AES_KEY_SIZE);
+      status = psa_import_key(&attributes, key, AES_KEY_SIZE, &key_id);
+      if (status != PSA_SUCCESS)
       {
-        mbedtls_aes_free(&aes);
+        ESP_LOGE(TAG, "aes128_encrypt - Failed to import a key (%d)", status);
         return false;
       }
-
-      ret = mbedtls_aes_crypt_ecb(&aes, MBEDTLS_AES_ENCRYPT, input, output);
-
-      mbedtls_aes_free(&aes);
-      return (ret == 0);
+      psa_reset_key_attributes(&attributes);
+      // Cipher
+      status = psa_cipher_encrypt(key_id, PSA_ALG_ECB_NO_PADDING, input, AES_BLOCK_SIZE, output, AES_BLOCK_SIZE, &output_length);
+      psa_destroy_key(key_id); // don't forget to destroy the key!
+      if (status != PSA_SUCCESS)
+      {
+        ESP_LOGE(TAG, "aes128_encrypt - Failed to begin cipher operation (%d)", status);
+        return false;
+      }
+      return true;
     }
 
     bool aes128_decrypt(
@@ -122,20 +140,32 @@ namespace iohome
         const uint8_t key[AES_KEY_SIZE],
         uint8_t output[AES_BLOCK_SIZE])
     {
-      mbedtls_aes_context aes;
-      mbedtls_aes_init(&aes);
-
-      int ret = mbedtls_aes_setkey_dec(&aes, key, 128);
-      if (ret != 0)
+      psa_status_t status;
+      psa_key_attributes_t attributes = PSA_KEY_ATTRIBUTES_INIT;
+      psa_algorithm_t alg = PSA_ALG_ECB_NO_PADDING;
+      size_t output_length = 0;
+      psa_key_id_t key_id;
+      // Import key
+      psa_set_key_usage_flags(&attributes, PSA_KEY_USAGE_DECRYPT);
+      psa_set_key_algorithm(&attributes, alg);
+      psa_set_key_type(&attributes, PSA_KEY_TYPE_AES);
+      psa_set_key_bits(&attributes, 8 * AES_KEY_SIZE);
+      status = psa_import_key(&attributes, key, AES_KEY_SIZE, &key_id);
+      if (status != PSA_SUCCESS)
       {
-        mbedtls_aes_free(&aes);
+        ESP_LOGE(TAG, "aes128_decrypt - Failed to import a key (%d)", status);
         return false;
       }
-
-      ret = mbedtls_aes_crypt_ecb(&aes, MBEDTLS_AES_DECRYPT, input, output);
-
-      mbedtls_aes_free(&aes);
-      return (ret == 0);
+      psa_reset_key_attributes(&attributes);
+      // Cipher
+      status = psa_cipher_decrypt(key_id, PSA_ALG_ECB_NO_PADDING, input, AES_BLOCK_SIZE, output, AES_BLOCK_SIZE, &output_length);
+      psa_destroy_key(key_id); // don't forget to destroy the key!
+      if (status != PSA_SUCCESS)
+      {
+        ESP_LOGE(TAG, "aes128_decrypt - Failed to begin cipher operation (%d)", status);
+        return false;
+      }
+      return true;
     }
 
     // ============================================================================

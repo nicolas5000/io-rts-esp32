@@ -13,14 +13,11 @@ namespace RadioLinks
     public:
         /// @brief Constructor for SX1276 radio module interface
         /// @param spiHost SPI Host Controller ID to use
-        /// @param sck SPI - GPIO connected to SCK pin
-        /// @param miso  SPI - GPIO connected to MISO pin
-        /// @param mosi SPI - GPIO connected to MOSI pin
         /// @param cs SPI - GPIO connected to CS pin
         /// @param rst GPIO connected to RST pin
         /// @param dio0 GPIO connected to DIO0 pin
         /// @param dio4 GPIO connected to DIO4 pin
-        explicit RadioSX1276(spi_host_device_t spiHost, int sck, int miso, int mosi, int cs, int rst, int dio0, int dio4);
+        explicit RadioSX1276(spi_host_device_t spiHost, int cs, int rst, int dio0, int dio4);
 
         /// @brief Dump all SX1276 registers to console
         void DumpRegisters();
@@ -52,9 +49,6 @@ namespace RadioLinks
         static constexpr const char *TAG = "RadioSX1276"; // tag to use when logging to console
 
         spi_host_device_t mSpiHost = SPI_HOST_MAX;
-        int mSpiSCK;  // SPI - SCK pin
-        int mSpiMISO; // SPI - MISO pin
-        int mSpiMOSI; // SPI - MOSI pin
         int mSpiCS;   // SPI - CS pin
         spi_device_handle_t mSpiHandle = nullptr;
 

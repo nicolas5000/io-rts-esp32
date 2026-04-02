@@ -15,7 +15,6 @@ constexpr uint16_t ADDR_MASK = 0x7f;
 constexpr uint32_t FXOSC = 32000000;
 constexpr uint8_t RF_PACKETCONFIG2_IOHOME_POWERFRAME = 0x10;                      // Missing from SX1276 FSK modem registers and bits definitions
 constexpr TickType_t MUTEX_MAX_WAIT_TICKS = ((TickType_t)2 * portTICK_PERIOD_MS); // Time to wait when taking mutex = 2 ms
-constexpr int8_t ESP_INTR_FLAG_DEFAULT = 0;
 
 static QueueHandle_t sGpioEvtQueue = NULL; // Queue containing GPIO triggered (uint32_t)
 static SemaphoreHandle_t sMutex;           // Mutex used to protect access to device on SPI bus
@@ -67,8 +66,8 @@ namespace RadioLinks
         }
     }
 
-    RadioSX1276::RadioSX1276(spi_host_device_t spiHost, int sck, int miso, int mosi, int cs, int rst, int dio0, int dio4)
-        : mSpiHost(spiHost), mSpiSCK(sck), mSpiMISO(miso), mSpiMOSI(mosi), mSpiCS(cs), mIoRST(rst), mIoDIO0(dio0), mIoDIO4(dio4)
+    RadioSX1276::RadioSX1276(spi_host_device_t spiHost, int cs, int rst, int dio0, int dio4)
+        : mSpiHost(spiHost), mSpiCS(cs), mIoRST(rst), mIoDIO0(dio0), mIoDIO4(dio4)
     {
     }
 
@@ -157,7 +156,6 @@ namespace RadioLinks
         // initialize GPIO for DIO0/DIO4/MISO/RST...
         pinMode(mIoDIO0, GPIO_MODE_INPUT, GPIO_PULLUP_ENABLE, GPIO_PULLDOWN_DISABLE);
         pinMode(mIoDIO4, GPIO_MODE_INPUT, GPIO_PULLUP_ENABLE, GPIO_PULLDOWN_DISABLE);
-        pinMode(mSpiMISO, GPIO_MODE_INPUT, GPIO_PULLUP_ENABLE, GPIO_PULLDOWN_DISABLE);
 
         // See §5.2.1. POR
         pinMode(mIoRST, GPIO_MODE_INPUT, GPIO_PULLUP_DISABLE, GPIO_PULLDOWN_DISABLE); // Connected to Reset; floating for POR
@@ -186,8 +184,6 @@ namespace RadioLinks
         // start gpio task
         xTaskCreate(gpio_task, "radio_gpio_task", 4096, this, 10, NULL); // priority 0 to avoid wdt triggering if priority 10 for example
 
-        // install gpio isr service
-        gpio_install_isr_service(ESP_INTR_FLAG_DEFAULT);
         // hook isr handler for specific gpio pin
         gpio_isr_handler_add(static_cast<gpio_num_t>(mIoDIO0), gpio_isr_handler, (void *)mIoDIO0);
         // hook isr handler for specific gpio pin
@@ -507,18 +503,6 @@ namespace RadioLinks
 
     void RadioSX1276::spiBegin()
     {
-        spi_bus_config_t bus = {};
-        bus.mosi_io_num = mSpiMOSI;
-        bus.miso_io_num = mSpiMISO;
-        bus.sclk_io_num = mSpiSCK;
-        bus.quadwp_io_num = -1;
-        bus.quadhd_io_num = -1;
-        esp_err_t err = spi_bus_initialize(mSpiHost, &bus, SPI_DMA_CH_AUTO);
-        if (err != ESP_OK)
-        {
-            ESP_LOGE(TAG, "spi_bus_initialize: %s", esp_err_to_name(err));
-        }
-
         spi_device_interface_config_t dev = {};
         dev.command_bits = 8;                    // Bit 7 = WRITE flag | Bits [0-6] = register address
         dev.address_bits = 0;                    // register address included in command bits
@@ -527,7 +511,7 @@ namespace RadioLinks
         dev.spics_io_num = mSpiCS;
         dev.queue_size = 1;
 
-        err = spi_bus_add_device(mSpiHost, &dev, &mSpiHandle);
+        esp_err_t err = spi_bus_add_device(mSpiHost, &dev, &mSpiHandle);
         if (err != ESP_OK)
         {
             ESP_LOGE(TAG, "spi_bus_add_device: %s", esp_err_to_name(err));

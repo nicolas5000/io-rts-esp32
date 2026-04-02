@@ -1,7 +1,8 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "NvsHelpers.hpp"
+#include "HardwareConfig.hpp"
+#include "NetworkHelpers.hpp"
 #include "RadioSX1276.hpp"
 #include "IoHomeControl.hpp"
 #include "cmd_line_management.hpp"
@@ -41,17 +42,16 @@ static void deviceStatusCallback(const std::string deviceID, const iohome::IoDev
 
 extern "C" void app_main(void)
 {
-    // Initialize NVS
-    esp_err_t err = NvsHelpers::InitNvs();
+    // Initialize Hardware: NVS, GPIO ISR, SPI bus
+    esp_err_t err = Config::InitHardware();
     ESP_ERROR_CHECK(err);
+
+    // Initialize network: Ethernet/Wifi + DHCP/Static IP + SNTP
+    NetworkHelpers::InitNetwork();
+    vTaskDelay(pdMS_TO_TICKS(5000));
 
     // Initialize IO-HOMECONTROL
 #ifdef CONFIG_ENABLE_IOHOMECONTROL
-#ifdef CONFIG_IOHOMECONTROL_SX1276_SPI_HOST3
-    spi_host_device_t spi_host = SPI3_HOST;
-#else
-    spi_host_device_t spi_host = SPI2_HOST;
-#endif
 #ifdef CONFIG_IOHOMECONTROL_LOGGING_ENABLED
     bool logging = true;
 #else
@@ -62,8 +62,7 @@ extern "C" void app_main(void)
 #else
     bool passive = false;
 #endif
-    RadioLinks::RadioSX1276 radio(spi_host, CONFIG_IOHOMECONTROL_SX1276_SPI_SCK,
-                                  CONFIG_IOHOMECONTROL_SX1276_SPI_MISO, CONFIG_IOHOMECONTROL_SX1276_SPI_MOSI,
+    RadioLinks::RadioSX1276 radio(Config::GetSX1276SpiHost(),
                                   CONFIG_IOHOMECONTROL_SX1276_SPI_CS, CONFIG_IOHOMECONTROL_SX1276_RST,
                                   CONFIG_IOHOMECONTROL_SX1276_DIO0, CONFIG_IOHOMECONTROL_SX1276_DIO4);
     iohome::IoHomeControl ioHome(&radio, loggerCallback, deviceStatusCallback);

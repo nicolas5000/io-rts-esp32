@@ -1,7 +1,188 @@
 menu "IO RTS Project Configuration"
-    menuconfig ENABLE_IOHOMECONTROL
+
+    orsource "$IDF_PATH/examples/common_components/env_caps/$IDF_TARGET/Kconfig.env_caps"
+
+    config ENABLE_IOHOMECONTROL
         bool "Enable IO-Homecontrol"
         default y
+
+    choice CONNECTIVITY_CHOOSE_LAYER
+        prompt "Choose between Wifi and Ethernet"
+        default CONNECTIVITY_CHOICE_WIFI
+
+        config CONNECTIVITY_CHOICE_WIFI
+            bool "Wifi"
+            depends on SOC_WIFI_SUPPORTED
+        
+        config CONNECTIVITY_CHOICE_ETH
+            bool "Ethernet (W5500 SPI module)"
+            select ETH_USE_SPI_ETHERNET
+    endchoice
+
+    choice IP_LAYER_CHOOSE_MODE
+        prompt "Choose between DHCP and static IP"
+        default CONNECTIVITY_CHOICE_DHCP
+
+        config CONNECTIVITY_CHOICE_DHCP
+            bool "DHCP"
+        
+        config CONNECTIVITY_CHOICE_STATIC
+            bool "Static IP"
+    endchoice
+
+    config IP_LAYER_HOSTNAME
+        string "Hostname"
+        default "io-rts-esp32"
+        help
+            Set hostname.
+
+    config SNTP_TIME_SERVER
+        string "SNTP server name"
+        default "pool.ntp.org"
+        help
+            Hostname of the SNTP server.
+
+    menu "Static IP Configuration"
+        visible if CONNECTIVITY_CHOICE_STATIC
+
+        config IP_LAYER_STATIC_IP_ADDR
+        string "Static IP address"
+        default "192.168.1.253"
+        help
+            Set static IP address.
+
+        config IP_LAYER_STATIC_NETMASK_ADDR
+            string "Static netmask address"
+            default "255.255.255.0"
+            help
+                Set static netmask address.
+
+        config IP_LAYER_STATIC_GW_ADDR
+            string "Static gateway address"
+            default "192.168.1.1"
+            help
+                Set static gateway address.
+
+        config IP_LAYER_STATIC_DNS_SERVER_MAIN
+            string "Main DNS server address"
+            default "192.168.1.1"
+            help
+                Set main DNS server address.
+
+        config IP_LAYER_STATIC_DNS_SERVER_BACKUP
+            string "Backup DNS server address"
+            default "192.168.1.1"
+            help
+                Set backup DNS server address. It can be same with the main DNS server address.
+    endmenu
+
+    menu "Wifi Configuration"
+        depends on CONNECTIVITY_CHOICE_WIFI
+
+        config ESP_WIFI_SSID
+            string "WiFi SSID"
+            default "myssid"
+            help
+                SSID (network name) to connect to.
+
+        config ESP_WIFI_PASSWORD
+            string "WiFi Password"
+            default "mypassword"
+            help
+                WiFi password (WPA or WPA2) to use.
+
+        choice ESP_WIFI_SAE_MODE
+            prompt "WPA3 SAE mode selection"
+            default ESP_STATION_WPA3_SAE_PWE_BOTH
+            help
+                Select mode for SAE as Hunt and Peck, H2E or both.
+            config ESP_STATION_WPA3_SAE_PWE_HUNT_AND_PECK
+                bool "HUNT AND PECK"
+            config ESP_STATION_WPA3_SAE_PWE_HASH_TO_ELEMENT
+                bool "H2E"
+                depends on ESP_WIFI_ENABLE_SAE_H2E
+            config ESP_STATION_WPA3_SAE_PWE_BOTH
+                bool "BOTH"
+                depends on ESP_WIFI_ENABLE_SAE_H2E
+        endchoice
+
+        config ESP_WIFI_PW_ID
+            string "Password identifier for SAE H2E"
+            depends on  ESP_STATION_WPA3_SAE_PWE_HASH_TO_ELEMENT || ESP_STATION_WPA3_SAE_PWE_BOTH
+            default ""
+
+        choice ESP_WIFI_SCAN_AUTH_MODE_THRESHOLD
+            prompt "WiFi Scan auth mode threshold"
+            default ESP_WIFI_AUTH_WPA2_WPA3_PSK
+            help
+                The weakest authmode to accept in the scan mode.
+                This value defaults to ESP_WIFI_AUTH_WPA2_PSK in case password is present and ESP_WIFI_AUTH_OPEN is used.
+                Please select ESP_WIFI_AUTH_WEP/ESP_WIFI_AUTH_WPA_PSK in case AP is operating in WEP/WPA mode.
+
+            config ESP_WIFI_AUTH_OPEN
+                bool "OPEN (unsecure)"
+            config ESP_WIFI_AUTH_WEP
+                bool "WEP (unsecure)"
+            config ESP_WIFI_AUTH_WPA_PSK
+                bool "WPA PSK (unsecure)"
+            config ESP_WIFI_AUTH_WPA_WPA2_PSK
+                bool "WPA/WPA2 PSK (unsecure)"
+            config ESP_WIFI_AUTH_WPA2_PSK
+                bool "WPA2 PSK"
+            config ESP_WIFI_AUTH_WAPI_PSK
+                bool "WAPI PSK"
+            config ESP_WIFI_AUTH_WPA2_WPA3_PSK
+                bool "WPA2/WPA3 PSK"
+            config ESP_WIFI_AUTH_WPA3_PSK
+                bool "WPA3 PSK"
+        endchoice
+    endmenu
+
+    menu "Ethernet Configuration"
+        depends on CONNECTIVITY_CHOICE_ETH
+
+        choice ETHERNET_SPI_HOST
+            prompt "Choose SPI_HOST to use for Ethernet module"
+            default ETHERNET_SPI_HOST2
+            help
+                You can use same SPI_HOST for Ethernet and radio modules and share SCLK, MOSI and MISO pins.
+
+            config ETHERNET_SPI_HOST2
+                bool "SPI_HOST2"
+            
+            config ETHERNET_SPI_HOST3
+                bool "SPI_HOST3"
+                depends on SOC_SPI_PERIPH_NUM > 2
+        endchoice
+
+        config ETHERNET_SPI_CLOCK_MHZ
+            int "SPI clock speed (MHz) for Ethernet module"
+            range 5 80
+            default 40
+            help
+                Set the clock speed (MHz) of SPI interface. Note: some modules crash at speed greater than 60, increase carefully!
+
+        config ETHERNET_SPI_CS_GPIO
+            int "SPI CS GPIO number for SPI Ethernet module"
+            range ENV_GPIO_RANGE_MIN ENV_GPIO_IN_RANGE_MAX
+            default 14
+            help
+                Set the GPIO number used by SPI CS, i.e. Chip Select associated with the SPI Eth module).
+
+        config ETHERNET_SPI_INT0_GPIO
+            int "Interrupt GPIO number SPI Ethernet module"
+            range ENV_GPIO_RANGE_MIN ENV_GPIO_IN_RANGE_MAX
+            default 15
+            help
+                Set the GPIO number used by the SPI Ethernet module interrupt line.
+
+        config ETHERNET_SPI_PHY_RST_GPIO
+            int "PHY Reset GPIO number of SPI Ethernet Module"
+            range ENV_GPIO_RANGE_MIN ENV_GPIO_OUT_RANGE_MAX
+            default 16
+            help
+                Set the GPIO number used to reset PHY chip on the SPI Ethernet module.
+    endmenu
 
     menu "IO Configuration"
         depends on ENABLE_IOHOMECONTROL
@@ -35,8 +216,9 @@ menu "IO RTS Project Configuration"
 
         choice IOHOMECONTROL_SX1276_SPI_HOST
             prompt "Choose SPI_HOST to use"
-            default IOHOMECONTROL_SX1276_SPI_HOST3 if SOC_SPI_PERIPH_NUM > 2
             default IOHOMECONTROL_SX1276_SPI_HOST2
+            help
+                You can use same SPI_HOST for Ethernet and radio modules and share SCLK, MOSI and MISO pins.
 
             config IOHOMECONTROL_SX1276_SPI_HOST2
                 bool "SPI_HOST2"
@@ -45,48 +227,86 @@ menu "IO RTS Project Configuration"
                 bool "SPI_HOST3"
                 depends on SOC_SPI_PERIPH_NUM > 2
         endchoice
-        
-        config IOHOMECONTROL_SX1276_SPI_MOSI
-            int "SPI MOSI GPIO Num"
-            default 6
-            help
-                GPIO number for SPI MOSI pin connected to SX1276 radio module.
-
-        config IOHOMECONTROL_SX1276_SPI_MISO
-            int "SPI MISO GPIO Num"
-            default 3
-            help
-                GPIO number for SPI MISO pin connected to SX1276 radio module.
-
-        config IOHOMECONTROL_SX1276_SPI_SCK
-            int "SPI SCK GPIO Num"
-            default 5
-            help
-                GPIO number for SPI SCK pin connected to SX1276 radio module.
 
         config IOHOMECONTROL_SX1276_SPI_CS
             int "SPI CS GPIO Num"
+            range ENV_GPIO_RANGE_MIN ENV_GPIO_OUT_RANGE_MAX
             default 7
             help
                 GPIO number for SPI CS pin connected to SX1276 radio module.
 
         config IOHOMECONTROL_SX1276_RST
             int "RST GPIO Num"
+            range ENV_GPIO_RANGE_MIN ENV_GPIO_OUT_RANGE_MAX
             default 8
             help
                 GPIO number for RST pin connected to SX1276 radio module.
 
         config IOHOMECONTROL_SX1276_DIO0
             int "DIO0 GPIO Num"
+            range ENV_GPIO_RANGE_MIN ENV_GPIO_OUT_RANGE_MAX
             default 9
             help
                 GPIO number for DIO0 pin connected to SX1276 radio module.
 
         config IOHOMECONTROL_SX1276_DIO4
             int "DIO4 GPIO Num"
+            range ENV_GPIO_RANGE_MIN ENV_GPIO_OUT_RANGE_MAX
             default 10
             help
                 GPIO number for DIO4 pin connected to SX1276 radio module.
+    endmenu
+
+    menu "SPI_HOST2 Configuration"
+        depends on ETHERNET_SPI_HOST2 || IOHOMECONTROL_SX1276_SPI_HOST2
+
+        config SPI_HOST2_SCK
+            int "SPI SCK GPIO Num"
+            range ENV_GPIO_RANGE_MIN ENV_GPIO_OUT_RANGE_MAX
+            default 5
+            help
+                GPIO number for SPI SCK pin connected to SPI_HOST2.
+
+        config SPI_HOST2_MOSI
+            int "SPI MOSI GPIO Num"
+            range ENV_GPIO_RANGE_MIN ENV_GPIO_OUT_RANGE_MAX
+            default 6
+            help
+                GPIO number for SPI MOSI pin connected to SPI_HOST2.
+
+        config SPI_HOST2_MISO
+            int "SPI MISO GPIO Num"
+            range ENV_GPIO_RANGE_MIN ENV_GPIO_OUT_RANGE_MAX
+            default 3
+            help
+                GPIO number for SPI MISO pin connected to SPI_HOST2.
+
+    endmenu
+
+    menu "SPI_HOST3 Configuration"
+        depends on ETHERNET_SPI_HOST3 || IOHOMECONTROL_SX1276_SPI_HOST3
+        
+        config SPI_HOST3_SCK
+            int "SPI SCK GPIO Num"
+            range ENV_GPIO_RANGE_MIN ENV_GPIO_OUT_RANGE_MAX
+            default 11
+            help
+                GPIO number for SPI SCK pin connected to SPI_HOST3.
+
+        config SPI_HOST3_MOSI
+            int "SPI MOSI GPIO Num"
+            range ENV_GPIO_RANGE_MIN ENV_GPIO_OUT_RANGE_MAX
+            default 12
+            help
+                GPIO number for SPI MOSI pin connected to SPI_HOST3.
+
+        config SPI_HOST3_MISO
+            int "SPI MISO GPIO Num"
+            range ENV_GPIO_RANGE_MIN ENV_GPIO_OUT_RANGE_MAX
+            default 13
+            help
+                GPIO number for SPI MISO pin connected to SPI_HOST3.
+
     endmenu
 
 endmenu

@@ -16,7 +16,7 @@ _I don't give any support concerning the IO-Homecontrol 1W part. I give limited 
 
 ### Documentation
 - All IO-Homecontrol details require you to carefully read the work of [Velocet/iown-homecontrol](https://github.com/Velocet/iown-homecontrol) to understand this protocol.
-- Wiki provides useful information about this project, especially:
+- The documentation provides useful information about this project, especially:
   - On IO-Homecontrol: the list of supported devices, the current knowledge about the protocol and commands (in addition to what is already documented in [Velocet/iown-homecontrol](https://github.com/Velocet/iown-homecontrol))
   - On this project development (structure of the project, how the source code is organized if you want to contribute or fork...)
 
@@ -29,17 +29,31 @@ These features are currently available:
   - Open / Close / Stop / Set to favorite position / Set to specific position (0-100%) for devices of type "blind" / "screen" (devices based on movement and position)
   - On / Off for devices of type "light" or "switch"
   - Get status feedback (currently moving, current position...), that's the main advantage of the 2W implementation!
-- Front-end: only command line is supported right now
+- Connectivity:
+  - Wifi (integrated to ESP32 chip) support
+  - Ethernet support (based on W5500 module)
+  - DHCP support, with DNS provided by DHCP server
+  - Static IPv4 support, including manual DNS server configuration
+- (S)NTP support for time synchronization
+- Front-end:
+  - Command line permits to:
+    - control IO devices: discover and pair, add, open, close, stop, set to favorite position, set to specific position (0-100%), change name inside device, link a remote to a device
+- Configuration storage to flash
 
 These features should be available before end of 2026 depending on my available time:
-- Configuration storage to flash
-- Wifi support
-- Ethernet support (based on W5500 module)
-- New front-ends:
-  - Web: configuration, devices control and status
-  - MQTT: devices control and status, with plug and play integration in Home Assistant without extra work on your side
-- RTS protocol for legacy devices (based on CC1101 module)
-- OTA sofware update (update over Wifi/Ethernet, without flashing from USB)
+- New features from command line (expected April 2026 :calendar:):
+  - Reboot ESP32
+  - Change Wifi and DHCP/IPv4 configuration without reflashing firmware
+  - Change IO-Homecontrol configuration (enable/disable logging, active/passive mode, change IO key, change NodeID, change Tx power) without reflashing firmware
+- MQTT (expected April-May 2026 :calendar:): devices control and status, with plug and play integration in Home Assistant without extra work on your side
+- Devices storage to flash (expected April-May 2026 :calendar:)
+- ESP32 security features (expected April-June 2026 :calendar:, optional, enable if you want): flash encryption, secure boot, firmware signature
+- OTA sofware update (expected April-June 2026 :calendar:): update over Wifi/Ethernet, without flashing from USB, with rollback in case of failure
+- RTS protocol for legacy devices, based on CC1101 module (expected August-October 2026 :calendar:)
+
+These features could be added later, if useful:
+- Support for new devices: I don't have these devices, my devices work well, so it will depend on you!
+- Web: configuration, devices control and status
 
 ### Hardware requirements
 In order to execute this project, you will need:
@@ -54,13 +68,22 @@ The development environment is based on:
 - Visual Studio Code (also known as VSCode)
 - ESP-IDF extension for VSCode and ESP-IDF SDK installed
 
+### Supported devices
+
+The project has been fully tested on these IO devices:
+- Somfy RS100 SOLAR IO roller shutter
+- Velux solar shutter (SSL)
+- Somfy Dexxo Smart io 800 (garage door with on/off light and on/off switch)
+
+The project should work with most of the IO devices of type shutter, light and switch. Please provide feedback for other models working (or not) on your side.
+
 ### Starting guide
 
 Here are a few steps to follow to start with this project:
 1. If you are nor familiar with VSCode and ESP-IDF, I encourage you to read ESP-IDF starting guide and try the "Hello world" example on your ESP32-S3 board. You should be able to build the example, flash the binary to your ESP32-S3 board and monitor the execution from ESP-IDF monitor tool before going to next step.
 2. Download this project / clone the repository, then open the project folder in VSCode.
 3. Choose the ESP32-S3 target
-4. Open "SDK Configuration Editor" to configure the project. Go to "IO RTS Project Configuration" section and choose the GPIO pins you want to use to connect the SX1276 radio module. The default configuration is compatible with the [Lilygo T3S3 SX1276 board](https://wiki.lilygo.cc/get_started/en/LoRa_GPS/T3S3/T3S3.html#Pin-Overview) even if I have never testes this board...
+4. Open "SDK Configuration Editor" to configure the project and go to "IO RTS Project Configuration" section. Configure network and choose the GPIO pins you want to use to connect the SX1276 radio module. The default configuration is compatible with the [Lilygo T3S3 SX1276 board](https://wiki.lilygo.cc/get_started/en/LoRa_GPS/T3S3/T3S3.html#Pin-Overview) even if I have never testes this board...
 5. Use wires to connect all the pins between ESP32-S3 board and SX1276 module (power, ground, and all pins chosen in the configuration)
 6. Build the source code, flash it to the board and monitor (there is single button that does everything if you are confident, otherwise, use the 3 buttons in this order).
 
@@ -100,6 +123,6 @@ Notes:
 
 ### How to contribute
 
-You can mainly contribute to this project by reporting any issue and by checking if your devices are supported and open a discussion to describe what is working or not. We will update list of supported devices based on your feedbacks! See the Wiki for the list of known supported devices and how to provide useful information about (not yet) supported devices.
+You can mainly contribute to this project by reporting any issue and by checking if your devices are supported and open a discussion to describe what is working or not. I will update the list of supported devices based on your feedbacks! See the documentation for the list of known supported devices and how to provide useful information about (not yet) supported devices.
 
 If you have development skills you can also propose source code modification to fix issues or add new supported devices.

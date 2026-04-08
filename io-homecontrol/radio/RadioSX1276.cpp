@@ -67,7 +67,7 @@ namespace RadioLinks
     }
 
     RadioSX1276::RadioSX1276(spi_host_device_t spiHost, int cs, int rst, int dio0, int dio4)
-        : mSpiHost(spiHost), mSpiCS(cs), mIoRST(rst), mIoDIO0(dio0), mIoDIO4(dio4)
+        : mSpiHost(spiHost), mSpiCS(cs), mIoRST(rst), mIoDIO0(dio0), mIoDIO4(dio4), mLastPreambleDetectedTime(0)
     {
     }
 

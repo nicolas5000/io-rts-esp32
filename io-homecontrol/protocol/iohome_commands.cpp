@@ -250,7 +250,9 @@ namespace iohome
         const uint8_t *key)
     {
         // Initialize frame for 2W mode
-        init_frame(outframe);
+        // We use is_start=true to use long preamble (required for many solar/low power devices)
+        // and we copy the lowPower flag from the original request
+        init_frame(outframe, true, true, false, (origin_frame.ctrl_byte_1 & CTRL1_LOW_POWER) != 0);
 
         // Set source and destination
         set_destination(outframe, dest_node);

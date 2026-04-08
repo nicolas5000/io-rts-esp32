@@ -141,7 +141,6 @@ namespace RadioLinks
                 ESP_LOGE(TAG, "ManageInterrupt - Busy");
             }
         }
-        vTaskDelay(pdMS_TO_TICKS(1)); // Core panic if we don't wait because task has high priority compared to idle task so wdt triggered!
     }
 
     RadioSX1276::~RadioSX1276()

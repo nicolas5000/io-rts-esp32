@@ -670,8 +670,9 @@ namespace iohome
 
   void IoHomeControl::AddDevice(const std::string &tmpDeviceID)
   {
-    std::string deviceID;
-    std::transform(tmpDeviceID.begin(), tmpDeviceID.end(), deviceID.begin(), ::toupper); // convert to uppercase
+    std::string deviceID = tmpDeviceID;
+    std::transform(deviceID.begin(), deviceID.end(), deviceID.begin(), [](unsigned char c)
+                   { return std::toupper(c); }); // convert to uppercase
     if (!sDeviceMap.contains(deviceID))
     {
       IoDevice device;

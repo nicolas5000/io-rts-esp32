@@ -56,7 +56,8 @@ static int do_ioadd_cmd(int argc, char **argv)
         return 1;
     }
     std::string deviceID(ioadd_args.device_id->sval[0]);
-    std::transform(deviceID.begin(), deviceID.end(), deviceID.begin(), ::toupper); // convert to uppercase
+    std::transform(deviceID.begin(), deviceID.end(), deviceID.begin(), [](unsigned char c)
+                   { return std::toupper(c); }); // convert to uppercase
     sIoHome->AddDevice(deviceID);
     return 0;
 }

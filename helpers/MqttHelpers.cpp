@@ -396,11 +396,19 @@ namespace Helpers
                             case DeviceType::LIGHT:
                                 // https://www.home-assistant.io/integrations/light.mqtt/
                                 device_plateform = "light";
-                                // TODO: manage brightness, waiting for feedback
+                                if (!it->second.is_deleted)
+                                {
+                                    error = error || (cJSON_AddStringToObject(cmp, "optimistic", "true") == NULL); // optimistic
+                                    // TODO: manage brightness, waiting for feedback
+                                }
                                 break;
                             case DeviceType::ON_OFF_SWITCH:
                                 // https://www.home-assistant.io/integrations/switch.mqtt/
                                 device_plateform = "switch";
+                                if (!it->second.is_deleted)
+                                {
+                                    error = error || (cJSON_AddStringToObject(cmp, "optimistic", "true") == NULL); // optimistic
+                                }
                                 break;
                             case DeviceType::LOCK:
                                 // https://www.home-assistant.io/integrations/lock.mqtt/
@@ -524,6 +532,8 @@ namespace Helpers
                 }
                 break;
             case DeviceType::LIGHT:
+                if (!device->second.is_stopped)
+                    return; // don't send current position as it is not correct
                 if (device->second.position == 0)
                     data = "ON";
                 else if (device->second.position == UNKNOWN_POSITION)
@@ -534,6 +544,8 @@ namespace Helpers
                 // TODO: manage brightness, waiting for feedback
                 break;
             case DeviceType::ON_OFF_SWITCH:
+                if (!device->second.is_stopped)
+                    return; // don't send current position as it is not correct
                 if (device->second.position == 0)
                     data = "ON";
                 else if (device->second.position == UNKNOWN_POSITION)

@@ -148,7 +148,7 @@ namespace iohome
   constexpr uint8_t CMD_PARAM_POSITION_UNKNOWN = 0xD4;  // UNKNOWN POSITION
   constexpr uint8_t CMD_PARAM_POSITION_FAVORITE = 0xD8; // FAVORITE POSITION
 
-  constexpr uint8_t CMD_PARAM_NAME_MAXSIZE = 16;
+  constexpr uint8_t CMD_PARAM_NAME_MAXSIZE = 32; // 32 to accommodate Latin-1 -> UTF-8 expansion (each non-ASCII byte may become 2 bytes)
   constexpr uint8_t CMD_PARAM_INFO1_MAXSIZE = 16;
   constexpr uint8_t CMD_PARAM_INFO2_MAXSIZE = 16;
 

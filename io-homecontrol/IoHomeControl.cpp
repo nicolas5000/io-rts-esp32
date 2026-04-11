@@ -6,6 +6,7 @@
 
 #include "IoHomeControl.hpp"
 #include "iohome_commands.hpp"
+#include "EncodingHelpers.hpp"
 #include "esp_task_wdt.h"
 #include "esp_timer.h"
 #include "freertos/task.h"
@@ -916,13 +917,16 @@ namespace iohome
       bool ret = false;
       UBaseType_t currentPriority = uxTaskPriorityGet(NULL);
       vTaskPrioritySet(NULL, IO_FRAME_PROCESSING_TASK); // change task priority to higher!
-      if (create_setname_request(request, mOwnNodeId, it->second.info.node_id, name.c_str(), name.length() + 1) && SendAndReceive(request, response, FREQUENCY_CHANNEL_2))
+      // Convert UTF-8 name to Latin-1 for the device (IO-Homecontrol uses Latin-1)
+      std::string latin1Name = Helpers::EncodingHelpers::Utf8ToLatin1(name);
+      if (create_setname_request(request, mOwnNodeId, it->second.info.node_id, latin1Name.c_str(), latin1Name.length() + 1) && SendAndReceive(request, response, FREQUENCY_CHANNEL_2))
       {
         if (response.command_id == CMD_SET_NAME_ANSWER)
         {
-          // Update Device Status
+          // Update Device Status — store the UTF-8 version in memory
           memset(it->second.info.name, 0, sizeof(it->second.info.name));
-          memcpy(it->second.info.name, name.c_str(), name.length());
+          size_t copyLen = name.length() < CMD_PARAM_NAME_MAXSIZE - 1 ? name.length() : CMD_PARAM_NAME_MAXSIZE - 1;
+          memcpy(it->second.info.name, name.c_str(), copyLen);
           if (!xQueueSendToBack(sIoDeviceStatusQueue, &it->second, 0))
           {
             IO_LOGE("UpdateDeviceStatus can't add device to queue!");
@@ -1216,7 +1220,16 @@ namespace iohome
         // statusFrame.data[0]: don't know why, on some devices it is 0x00, on others it is first character (eg DexxoSmartio800)
         // last char in data field is 0x00 or 0x20, don't copy it, so copy at most (len - 2) bytes
         uint8_t begin = statusFrame.data[0] > 0x20 ? 0 : 1;
-        std::string name = std::string(statusFrame.data + begin, statusFrame.data + statusFrame.data_len - begin).substr(0, CMD_PARAM_NAME_MAXSIZE - 1);
+        size_t rawLen = statusFrame.data_len - begin;
+        // Strip trailing null/space bytes
+        while (rawLen > 0 && (statusFrame.data[begin + rawLen - 1] == 0x00 || statusFrame.data[begin + rawLen - 1] == 0x20))
+          rawLen--;
+        // Convert Latin-1 (IO-Homecontrol encoding) to UTF-8
+        std::string name = Helpers::EncodingHelpers::Latin1ToUtf8(statusFrame.data + begin, rawLen);
+        // Truncate to fit buffer (leave room for null terminator)
+        if (name.length() >= CMD_PARAM_NAME_MAXSIZE)
+          name.resize(CMD_PARAM_NAME_MAXSIZE - 1);
+        memset(deviceIt->second.info.name, 0, sizeof(deviceIt->second.info.name));
         memcpy(deviceIt->second.info.name, name.c_str(), name.length());
       }
       // Note: don't notify device update here, as it is a frame received during device add (notification will be sent later)

@@ -20,3 +20,4 @@ dependencies:
     - if: $CONFIG{CONNECTIVITY_CHOICE_ETH} == True
   espressif/mqtt: ^1.0.0
   espressif/cjson: ^1.7.19~2
+  joltwallet/littlefs: ^1.20.4

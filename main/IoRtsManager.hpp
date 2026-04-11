@@ -3,6 +3,7 @@
 #include "MqttHelpers.hpp"
 #include "RadioSX1276.hpp"
 #include "IoHomeControl.hpp"
+#include "DeviceStorage.hpp"
 
 #include <map>
 #include <mutex>
@@ -44,6 +45,12 @@ namespace IoRts
 
     private:
         bool mIoPassive = false; // current configuration, initialized at boot
+
+        /// @brief Initialize device storage (mount LittleFS partition)
+        void InitializeStorage();
+
+        /// @brief Load devices and remotes from flash storage, register them in IoHomeControl
+        void LoadDevicesFromStorage();
 
         /// @brief Initialize Io objects members (mSX1276Radio, mIoHome)
         void InitializeIo();

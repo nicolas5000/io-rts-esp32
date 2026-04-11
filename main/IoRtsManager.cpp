@@ -1,6 +1,7 @@
 #include "IoRtsManager.hpp"
 #include "HardwareConfig.hpp"
 #include "MqttConfig.hpp"
+#include "DeviceStorage.hpp"
 
 #include "esp_log.h"
 #include "sdkconfig.h"
@@ -54,7 +55,9 @@ namespace IoRts
                 // ask for discovery message
                 sendDiscovery = true;
                 // add device to flash storage
-                // TODO
+                Helpers::StoredDevice storedDevice = {};
+                storedDevice.device = device;
+                Helpers::DeviceStorage::SaveDevice(deviceID, storedDevice);
             }
             else
             {
@@ -71,11 +74,30 @@ namespace IoRts
                     sendDiscovery = true;
                     memcpy(it->second.info.name, device.info.name, sizeof(device.info.name)); // could be update by "SetName"
                 }
+                // Update device type/subtype if they were unknown and now available
+                if (it->second.info.device_type == iohome::DeviceType::UNKNOWN && device.info.device_type != iohome::DeviceType::UNKNOWN)
+                {
+                    sendDiscovery = true;
+                    it->second.info.device_type = device.info.device_type;
+                    it->second.info.device_subtype = device.info.device_subtype;
+                    it->second.info.manufacturer = device.info.manufacturer;
+                }
                 it->second.is_stopped = device.is_stopped;
                 it->second.last_status_timestamp = device.last_status_timestamp;
                 it->second.next_status_update_timestamp = device.next_status_update_timestamp;
                 it->second.position = device.position;
                 it->second.target = device.target;
+                // Update storage when static device info changed (name, type, ...)
+                if (sendDiscovery)
+                {
+                    // Load existing file to preserve linked remotes, then update device info
+                    Helpers::StoredDevice storedDevice = {};
+                    storedDevice.device = it->second;
+                    Helpers::StoredDevice existing;
+                    if (Helpers::DeviceStorage::LoadDevice(deviceID, existing) == ESP_OK)
+                        storedDevice.linked_remotes = existing.linked_remotes;
+                    Helpers::DeviceStorage::SaveDevice(deviceID, storedDevice);
+                }
             }
             sIoRtsManager->mIoDevicesMutex.unlock(); // release mutex as MQTT needs it!
             // send MQTT messages
@@ -94,8 +116,12 @@ namespace IoRts
     IoRtsManager::IoRtsManager()
     {
         sIoRtsManager = this;
+        // Initialize device storage (mount LittleFS)
+        InitializeStorage();
         // Initialize IO objects
         InitializeIo();
+        // Load devices from flash storage
+        LoadDevicesFromStorage();
         // Initialize MQTT objects
         InitializeMqtt();
         // Start everything
@@ -131,8 +157,8 @@ namespace IoRts
             // Update mIODevices
             it->second.is_deleted = true;
             // Remove from storage
-            // TODO
-            sIoRtsManager->mIoDevicesMutex.unlock(); // release mutex as MQTT needs it!
+            Helpers::DeviceStorage::RemoveDevice(deviceID);
+            sIoRtsManager->mIoDevicesMutex.unlock(); // release mutex as MQTT needs it!;
             if (sMqttHelper != nullptr)
             {
                 // send MQTT discovery message
@@ -153,7 +179,7 @@ namespace IoRts
         if (success)
         {
             // Add remote to storage
-            // TODO
+            Helpers::DeviceStorage::AddRemoteToDevice(remoteID, deviceID);
         }
         return success;
     }
@@ -163,7 +189,47 @@ namespace IoRts
         if (mIoHome != nullptr)
             mIoHome->DeleteRemote(remoteID);
         // Remove from storage
-        // TODO
+        Helpers::DeviceStorage::RemoveRemote(remoteID);
+    }
+    void IoRtsManager::InitializeStorage()
+    {
+        esp_err_t err = Helpers::DeviceStorage::Init();
+        if (err != ESP_OK)
+        {
+            ESP_LOGE(TAG, "Failed to initialize device storage (%s)", esp_err_to_name(err));
+        }
+    }
+    void IoRtsManager::LoadDevicesFromStorage()
+    {
+#ifdef CONFIG_ENABLE_IOHOMECONTROL
+        if (mIoHome == nullptr)
+            return;
+
+        std::map<std::string, Helpers::StoredDevice> storedDevices;
+        esp_err_t err = Helpers::DeviceStorage::LoadAll(storedDevices);
+        if (err != ESP_OK)
+        {
+            ESP_LOGE(TAG, "Failed to load devices from storage (%s)", esp_err_to_name(err));
+            return;
+        }
+
+        for (const auto &[deviceID, storedDevice] : storedDevices)
+        {
+            // Register device in protocol layer
+            mIoHome->AddDevice(deviceID);
+            // Add to our local map
+            mIoDevicesMutex.lock();
+            mIoDevices.insert({deviceID, storedDevice.device});
+            mIoDevicesMutex.unlock();
+            // Restore remote links
+            for (const std::string &remoteID : storedDevice.linked_remotes)
+            {
+                mIoHome->LinkRemoteToDevice(remoteID, deviceID);
+            }
+            ESP_LOGI(TAG, "Restored device %s (%s) with %u remote(s)",
+                     deviceID.c_str(), storedDevice.device.info.name, storedDevice.linked_remotes.size());
+        }
+#endif // ENABLE_IOHOMECONTROL
     }
     void IoRtsManager::InitializeIo()
     {

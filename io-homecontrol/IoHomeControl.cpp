@@ -77,6 +77,7 @@ namespace iohome
   struct RadioRxFrameQueueItem
   {
     int64_t timestamp;             // Timestamp of the frame when added to the queue, in us (use esp_timer_get_time() to fill)
+    int64_t time_since_preamble;   // Time between preamble is detected and frame is received, in us (only available if DIO4 is wired)
     uint8_t frame[FRAME_MAX_SIZE]; // RAW frame
     uint8_t frame_len;             // Actual length of frame
     uint32_t frequency;            // Frequency used to receive packet
@@ -196,7 +197,7 @@ namespace iohome
   /// @param buffer Frame data received by radio layer
   /// @param frequency Frequency used to receive the frame
   /// @param rssi RSSI of the received data
-  static void received_frame_handler(uint8_t len, uint8_t buffer[], uint32_t frequency, float rssi)
+  static void received_frame_handler(uint8_t len, uint8_t buffer[], uint32_t frequency, float rssi, int64_t time_since_preamble)
   {
     if (len > FRAME_MAX_SIZE)
     {
@@ -205,6 +206,7 @@ namespace iohome
     }
     RadioRxFrameQueueItem item;
     item.timestamp = esp_timer_get_time();
+    item.time_since_preamble = time_since_preamble;
     item.frame_len = len;
     item.frequency = frequency;
     item.rssi = rssi;
@@ -257,7 +259,7 @@ namespace iohome
         {
           rxFrame.frequency = item.frequency;
           rxFrame.rssi = item.rssi;
-          IO_LOGI("Received at {} ({}us since preamble) - RSSI {:.1f}", item.timestamp, item.timestamp - ioHome->mRadio->GetLastPreambleDetectedTime(), item.rssi);
+          IO_LOGI("Received at {} ({}us since preamble) - RSSI {:.1f}", item.timestamp, item.time_since_preamble, item.rssi);
           IO_LOGI("Rcvd ({:.2f}) command {:02X} from {} to {} CTRL0 {:02X} CTRL1 {:02X} - {} bytes: {}",
                   rxFrame.frequency / 1000000.0, rxFrame.frame.command_id, buffToHexString(NODE_ID_SIZE, rxFrame.frame.src_node), buffToHexString(NODE_ID_SIZE, rxFrame.frame.dest_node),
                   rxFrame.frame.ctrl_byte_0, rxFrame.frame.ctrl_byte_1, rxFrame.frame.data_len, buffToHexString(rxFrame.frame.data_len, rxFrame.frame.data));

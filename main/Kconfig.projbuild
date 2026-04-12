@@ -251,10 +251,10 @@ menu "IO RTS Project Configuration"
 
         config IOHOMECONTROL_SX1276_DIO4
             int "DIO4 GPIO Num"
-            range ENV_GPIO_RANGE_MIN ENV_GPIO_OUT_RANGE_MAX
+            range -1 ENV_GPIO_OUT_RANGE_MAX
             default 10
             help
-                GPIO number for DIO4 pin connected to SX1276 radio module.
+                GPIO number for DIO4 pin connected to SX1276 radio module. Set -1 if not connected on your board.
     endmenu
 
     menu "MQTT Client configuration"

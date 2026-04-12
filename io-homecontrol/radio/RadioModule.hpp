@@ -38,8 +38,8 @@ namespace RadioLinks
         virtual void Init(bool ioMode) = 0;
 
         /// @brief Register callback that will be called when a frame is received on radio link
-        /// @param func_ptr Callback that will receive buffer length, buffer, frequency and rssi values
-        virtual void RegisterReceiveCallback(void (*func_ptr)(uint8_t len, uint8_t buffer[], uint32_t frequency, float rssi)) = 0;
+        /// @param func_ptr Callback that will receive buffer length, buffer, frequency, rssi, time since preambule values
+        virtual void RegisterReceiveCallback(void (*func_ptr)(uint8_t len, uint8_t buffer[], uint32_t frequency, float rssi, int64_t time_since_preamble)) = 0;
 
         // Configuration
 
@@ -101,10 +101,6 @@ namespace RadioLinks
         /// @param frequency Frequency to use to send the frame
         /// @return RADIO_ERR_NONE if no error, other value depending on error
         virtual RADIO_ERRCODE Send(uint8_t len, uint8_t *buffer, uint16_t preambleLen, uint32_t frequency) = 0;
-
-        /// @brief Get timestamp when a preamble has been detected for the last time
-        /// @return Timestamp (use esp_timer_get_time() to compare to current time)
-        virtual int64_t GetLastPreambleDetectedTime() = 0;
 
         /// @brief Call to know if a preamble has been detected since last call to this method
         /// @return true if a preamble has been detected since last call to this method, false otherwise.

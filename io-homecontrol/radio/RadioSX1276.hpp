@@ -30,7 +30,7 @@ namespace RadioLinks
 
         ~RadioSX1276() override;
         void Init(bool ioMode) override;
-        void RegisterReceiveCallback(void (*func_ptr)(uint8_t, uint8_t[], uint32_t, float)) override;
+        void RegisterReceiveCallback(void (*func_ptr)(uint8_t, uint8_t[], uint32_t, float, int64_t)) override;
         RADIO_ERRCODE SetFrequency(uint32_t frequency) override;
         RADIO_ERRCODE SetModulation(Modulation modulation) override;
         RADIO_ERRCODE SetOutputPower(uint8_t txPower) override;
@@ -42,7 +42,6 @@ namespace RadioLinks
         RADIO_ERRCODE StartReceive() override;
         RADIO_ERRCODE StopReceive() override;
         RADIO_ERRCODE Send(uint8_t len, uint8_t *buffer, uint16_t preambleLen, uint32_t frequency) override;
-        int64_t GetLastPreambleDetectedTime() override;
         bool isPreambleDetected() override;
 
     private:
@@ -56,7 +55,7 @@ namespace RadioLinks
         int mIoDIO0; // GPIO connected to DIO0 pin
         int mIoDIO4; // GPIO connected to DIO4 pin
 
-        void (*mCallback)(uint8_t len, uint8_t buffer[], uint32_t frequency, float rssi) = nullptr;
+        void (*mCallback)(uint8_t len, uint8_t buffer[], uint32_t frequency, float rssi, int64_t time_since_preamble) = nullptr;
 
         bool mIsReceiveMode = false;       // is currently in receivins state (set to true by calling StartReceive())
         int64_t mLastPreambleDetectedTime; // in us, use esp_timer_get_time() to fill

@@ -100,7 +100,8 @@ namespace RadioLinks
                     xSemaphoreGive(sMutex);
                     if (mCallback != nullptr)
                     {
-                        mCallback(bufferLen, buffer, mCurrentFrequency, rssi);
+                        int64_t timeSincePreamble = (mIoDIO4 == GPIO_NUM_NC) ? 0 : esp_timer_get_time() - mLastPreambleDetectedTime;
+                        mCallback(bufferLen, buffer, mCurrentFrequency, rssi, timeSincePreamble);
                     }
                 }
                 else if (reg & RF_IRQFLAGS2_PACKETSENT)
@@ -195,7 +196,7 @@ namespace RadioLinks
         ESP_LOGI(TAG, "Init... end");
     }
 
-    void RadioSX1276::RegisterReceiveCallback(void (*func_ptr)(uint8_t, uint8_t[], uint32_t, float))
+    void RadioSX1276::RegisterReceiveCallback(void (*func_ptr)(uint8_t, uint8_t[], uint32_t, float, int64_t))
     {
         mCallback = func_ptr;
     }
@@ -468,11 +469,6 @@ namespace RadioLinks
             err = RADIO_ERR_BUSY;
         }
         return err;
-    }
-
-    int64_t RadioSX1276::GetLastPreambleDetectedTime()
-    {
-        return mLastPreambleDetectedTime;
     }
 
     bool RadioSX1276::isPreambleDetected()

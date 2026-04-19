@@ -26,7 +26,7 @@ namespace iohome
   constexpr uint32_t BAND_WIDTH = 250000;         // Hz
   constexpr uint32_t FREQ_DEVIATION = 19200;      // Hz
   constexpr uint16_t LONG_PREAMBLE_LENGTH = 1024; // 8192 bits, for start frame. Note that 4096 is not enough for solar (low power) blinds!
-  constexpr uint16_t SHORT_PREAMBLE_LENGTH = 32;  // 256 bits, for other frames
+  constexpr uint16_t SHORT_PREAMBLE_LENGTH = 8;   // 64 bits, for other frames
 
   // Sync Word
   constexpr uint32_t SYNC_WORD = 0x33FF55;
@@ -154,8 +154,8 @@ namespace iohome
 
   constexpr uint8_t CMD_PARAM_SUBTYPE_MASK = 0x3F;
 
-  constexpr uint8_t CMD_PARAM_STATUS_STOPPED = 0x01; // In CMD_PRIVATE_RESPONSE and CMD_STATUS_UPDATE, byte0 & 0x01 mens device is not moving
-  constexpr uint8_t CMD_PARAM_STATUS_EXPECTED = 0x80; // In CMD_PRIVATE_RESPONSE and CMD_STATUS_UPDATE, byte1 & 0x80 mens device should send CMD_STATUS_UPDATE
+  constexpr uint8_t CMD_PARAM_STATUS_STOPPED = 0x01;    // In CMD_PRIVATE_RESPONSE and CMD_STATUS_UPDATE, byte0 & 0x01 mens device is not moving
+  constexpr uint8_t CMD_PARAM_STATUS_EXPECTED = 0x80;   // In CMD_PRIVATE_RESPONSE and CMD_STATUS_UPDATE, byte1 & 0x80 mens device should send CMD_STATUS_UPDATE
   constexpr uint16_t CMD_PARAM_STATUS_POS_MAX = 0xC800; // 100% closed
 
   constexpr uint8_t CMD_PARAM_ERROR_BAD_AUTH = 0x18;

@@ -749,90 +749,81 @@ namespace iohome
           && xQueueReceive(sRxIoQueue, &rxItem, RECEIVED_IO_DISCOVERY_RESPONSE_WAIT_TICKS) && (rxItem.frame.command_id == CMD_DISCOVER_RESPONSE) // expected answer
           && process_discovery_response(rxItem.frame, device))                                                                                   // discovery response parsing OK
       {
-        // We have discovered a device, let's confirm discovery
-        if (create_discovery_confirmation_request(request, mOwnNodeId, device.info.node_id) // request created
-            && SendAndReceive(request, response, FREQUENCY_CHANNEL_2)                       // send OK, received something
-            && (response.command_id == CMD_DISCOVER_CONFIRMATION_ACK))                      // expected answer
+        // We have discovered a device, let's start pairing process
+        if (create_init_transfer(request, mOwnNodeId, device.info.node_id)        // request created
+            && TransmitFrame(request, FREQUENCY_CHANNEL_2, LONG_PREAMBLE_LENGTH)) // send OK
         {
-          // We have confirmed discovery, let's start pairing process
-          if (create_init_transfer(request, mOwnNodeId, device.info.node_id)        // request created
-              && TransmitFrame(request, FREQUENCY_CHANNEL_2, LONG_PREAMBLE_LENGTH)) // send OK
+          // We have sent key init request, let's get challenge from device
+          if (xQueueReceive(sRxIoQueue, &rxItem, RECEIVED_IO_TREATMENT_WAIT_TICKS))
           {
-            // We have sent key init request, let's get challenge from device
-            if (xQueueReceive(sRxIoQueue, &rxItem, RECEIVED_IO_TREATMENT_WAIT_TICKS))
+            // We have a response, check it
+            if (memcmp(rxItem.frame.src_node, device.info.node_id, NODE_ID_SIZE) != 0 // same device?
+                || memcmp(rxItem.frame.dest_node, mOwnNodeId, NODE_ID_SIZE) != 0      // for us?
+                || rxItem.frame.command_id != CMD_CHALLENGE_REQUEST                   // expected answer ID?
+                || rxItem.frame.data_len != HMAC_SIZE)                                // expected answer data?
             {
-              // We have a response, check it
-              if (memcmp(rxItem.frame.src_node, device.info.node_id, NODE_ID_SIZE) != 0 // same device?
-                  || memcmp(rxItem.frame.dest_node, mOwnNodeId, NODE_ID_SIZE) != 0      // for us?
-                  || rxItem.frame.command_id != CMD_CHALLENGE_REQUEST                   // expected answer ID?
-                  || rxItem.frame.data_len != HMAC_SIZE)                                // expected answer data?
-              {
-                IO_LOGE("DiscoverAndPairDevice: failed to confirm discovery!");
-              }
-              else
-              {
-                // We have received a challenge, let's send our key!
-                IoFrame keyTransfer;
-                if (create_key_transfer(keyTransfer, request, device.info.node_id, mOwnNodeId, mSystemKey, rxItem.frame.data) // request created
-                    && SendAndReceive(keyTransfer, response, FREQUENCY_CHANNEL_2)                                             // send OK, received something
-                    && (response.command_id == CMD_KEY_TRANSFER_CONFIRMATION))                                                // expected answer
-                {
-                  // Create this device
-                  std::string deviceID = buffToHexString(NODE_ID_SIZE, device.info.node_id);
-                  sDeviceMap.insert({deviceID, device});
-                  IO_LOGI("DiscoverAndPairDevice: device {} added!", deviceID);
-                  ret = true;
-                  // Now try to find "sub devices" (like a light or switch on DexxoSmartio800)
-                  if (create_discoveryspe_request(request, mOwnNodeId, mSystemKey)          // request created
-                      && TransmitFrame(request, FREQUENCY_CHANNEL_2, LONG_PREAMBLE_LENGTH)) // send OK
-                  {
-                    while ((xQueueReceive(sRxIoQueue, &rxItem, RECEIVED_IO_TREATMENT_WAIT_TICKS)))
-                    {
-                      IoDevice subDevice;
-                      if (memcmp(rxItem.frame.dest_node, mOwnNodeId, NODE_ID_SIZE) == 0 // for us
-                          && rxItem.frame.command_id == CMD_DISCOVER_SPE_RESPONSE       // expected response
-                          && process_discoveryspe_response(rxItem.frame, subDevice))    // parsing success
-                      {
-                        // Let's add the device (it already has the key)
-                        std::string subDeviceID = buffToHexString(NODE_ID_SIZE, subDevice.info.node_id);
-                        sDeviceMap.insert({subDeviceID, subDevice});
-                        IO_LOGI("DiscoverAndPairDevice: subdevice {} added!", subDeviceID);
-                        // and confirm discovery to this device
-                        if (create_discovery_confirmation_request(request, mOwnNodeId, subDevice.info.node_id) // request created
-                            && SendAndReceive(request, response, FREQUENCY_CHANNEL_2)                          // send OK, received something
-                            && (response.command_id == CMD_DISCOVER_CONFIRMATION_ACK))                         // expected answer
-                        {
-                          // IO_LOGI("DiscoverAndPairDevice: confirmed discovery to subdevice {}!", subDeviceID);
-                        }
-                        else
-                        {
-                          // IO_LOGE("DiscoverAndPairDevice: failed to confirm discovery to subdevice!");
-                        }
-                      }
-                      else
-                        break;
-                    }
-                  }
-                }
-                else
-                {
-                  IO_LOGE("DiscoverAndPairDevice: failed to send key / no or bad answer received!");
-                }
-              }
+              IO_LOGE("DiscoverAndPairDevice: failed to confirm discovery!");
             }
             else
             {
-              IO_LOGE("DiscoverAndPairDevice: no answer received to key init request!");
+              // We have received a challenge, let's send our key!
+              IoFrame keyTransfer;
+              if (create_key_transfer(keyTransfer, request, device.info.node_id, mOwnNodeId, mSystemKey, rxItem.frame.data) // request created
+                  && SendAndReceive(keyTransfer, response, FREQUENCY_CHANNEL_2)                                             // send OK, received something
+                  && (response.command_id == CMD_KEY_TRANSFER_CONFIRMATION))                                                // expected answer
+              {
+                // Create this device
+                std::string deviceID = buffToHexString(NODE_ID_SIZE, device.info.node_id);
+                device.is_deleted = false;
+                sDeviceMap.insert({deviceID, device});
+                IO_LOGI("DiscoverAndPairDevice: device {} added!", deviceID);
+                ret = true;
+                // Now try to find "sub devices" (like a light or switch on DexxoSmartio800)
+                if (create_discoveryspe_request(request, mOwnNodeId, mSystemKey)          // request created
+                    && TransmitFrame(request, FREQUENCY_CHANNEL_2, LONG_PREAMBLE_LENGTH)) // send OK
+                {
+                  while ((xQueueReceive(sRxIoQueue, &rxItem, RECEIVED_IO_TREATMENT_WAIT_TICKS)))
+                  {
+                    IoDevice subDevice;
+                    if (memcmp(rxItem.frame.dest_node, mOwnNodeId, NODE_ID_SIZE) == 0 // for us
+                        && rxItem.frame.command_id == CMD_DISCOVER_SPE_RESPONSE       // expected response
+                        && process_discoveryspe_response(rxItem.frame, subDevice))    // parsing success
+                    {
+                      // Let's add the device (it already has the key)
+                      std::string subDeviceID = buffToHexString(NODE_ID_SIZE, subDevice.info.node_id);
+                      sDeviceMap.insert({subDeviceID, subDevice});
+                      IO_LOGI("DiscoverAndPairDevice: subdevice {} added!", subDeviceID);
+                      // and confirm discovery to this device
+                      if (create_discovery_confirmation_request(request, mOwnNodeId, subDevice.info.node_id) // request created
+                          && SendAndReceive(request, response, FREQUENCY_CHANNEL_2)                          // send OK, received something
+                          && (response.command_id == CMD_DISCOVER_CONFIRMATION_ACK))                         // expected answer
+                      {
+                        // IO_LOGI("DiscoverAndPairDevice: confirmed discovery to subdevice {}!", subDeviceID);
+                      }
+                      else
+                      {
+                        // IO_LOGE("DiscoverAndPairDevice: failed to confirm discovery to subdevice!");
+                      }
+                    }
+                    else
+                      break;
+                  }
+                }
+              }
+              else
+              {
+                IO_LOGE("DiscoverAndPairDevice: failed to send key / no or bad answer received!");
+              }
             }
           }
           else
           {
-            IO_LOGE("DiscoverAndPairDevice: failed to send key init request!");
+            IO_LOGE("DiscoverAndPairDevice: no answer received to key init request!");
           }
         }
         else
         {
-          IO_LOGE("DiscoverAndPairDevice: failed to confirm discovery!");
+          IO_LOGE("DiscoverAndPairDevice: failed to send key init request!");
         }
       }
       else
@@ -1123,7 +1114,8 @@ namespace iohome
           IoFrame challengeResponse;
           if (create_challenge_response(challengeResponse, request.dest_node, mOwnNodeId, rxItem.frame.data, request, mSystemKey))
           {
-            if (setStartFlagToAuthentResponse) challengeResponse.ctrl_byte_0 |= CTRL0_START; // Set Start bit
+            if (setStartFlagToAuthentResponse)
+              challengeResponse.ctrl_byte_0 |= CTRL0_START; // Set Start bit
             if (TransmitFrame(challengeResponse, frequency, SHORT_PREAMBLE_LENGTH))
             {
               // Now wait for final response

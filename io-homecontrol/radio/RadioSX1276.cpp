@@ -103,6 +103,7 @@ namespace RadioLinks
                         int64_t timeSincePreamble = (mIoDIO4 == GPIO_NUM_NC) ? 0 : esp_timer_get_time() - mLastPreambleDetectedTime;
                         mCallback(bufferLen, buffer, mCurrentFrequency, rssi, timeSincePreamble);
                     }
+                    isPreambleDetected(); // reset preamble flag to be sure it is not a flag from a previous frame
                 }
                 else if (reg & RF_IRQFLAGS2_PACKETSENT)
                 {
@@ -404,6 +405,7 @@ namespace RadioLinks
                 ESP_LOGE(TAG, "StartReceive - SpiWriteByte error!");
                 return err;
             }
+            isPreambleDetected(); // reset preamble flag to be sure it is not a flag from a previous frame
             // ESP_LOGI(TAG, "StartReceive");
         }
         else
@@ -479,7 +481,7 @@ namespace RadioLinks
 
             if (tmp & RF_IRQFLAGS1_PREAMBLEDETECT)
             {
-                // ESP_LOGI(TAG, "isPreambleDetected - 1");
+                // Reset 'preamble detected' flag
                 uint8_t err = SpiWriteByte(REG_IRQFLAGS1, tmp & RF_IRQFLAGS1_PREAMBLEDETECT);
                 if (err != RADIO_ERR_NONE)
                 {

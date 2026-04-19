@@ -44,7 +44,7 @@ These features are currently available:
     - Change DHCP/IPv4 configuration without reflashing firmware (configuration applied after reboot)
     - Change MQTT configuration without reflashing firmware (configuration applied after reboot)
     - Change IO-Homecontrol configuration without reflashing firmware (configuration applied after reboot)
-    - Note: command line features are password protected by default, change default password in project configuration before bulding firmware.
+    - Note: command line features are password protected by default, change default password in project configuration before building firmware.
   - MQTT support:
     - If IO logging and MQTT are both enabled, IO layer messages are sent to MQTT_TOPIC_PREFIX/log
     - Discovery message is published and compatible with Home Assistant, permitting to automatically add devices to it without extra configuration (only in active mode).

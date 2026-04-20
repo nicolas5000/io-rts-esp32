@@ -162,4 +162,11 @@ namespace iohome
     /// @param error_code Error code to send
     /// @return true on success
     bool create_error_response(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id, uint8_t error_code);
+
+    /// @brief Create a SET_CONFIG1 IO Frame (0x6F)
+    /// @param frame Output IoFrame structure
+    /// @param own_node_id Source node ID (3 bytes)
+    /// @param dst_node_id Destination node ID (3 bytes) for output frame to create
+    /// @return true on success
+    bool create_set_config1_command(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id);
 } // namespace iohome

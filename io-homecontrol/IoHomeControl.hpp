@@ -173,6 +173,11 @@ namespace iohome
     /// @param remoteID Remote ID (6 characters as hex representation of the 3 bytes, eg "112233")
     void DeleteRemote(const std::string &remoteID);
 
+    /// @brief Send configuration to device to ask for automatic status update if device receives any 1W/2W command
+    /// @param deviceID Device ID (6 characters as hex representation of the 3 bytes, eg "112233")
+    /// @return true if device was successfully configured, false otherwise (some devices don't support this configuration command)
+    bool ConfigureDeviceToSendStatus(const std::string &deviceID);
+
   protected:
     uint8_t mOwnNodeId[NODE_ID_SIZE]; // Our NodeID (3 bytes)
     uint8_t mSystemKey[AES_KEY_SIZE]; // Our system key (16 bytes)

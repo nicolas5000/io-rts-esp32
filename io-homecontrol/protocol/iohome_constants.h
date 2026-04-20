@@ -129,10 +129,8 @@ namespace iohome
   constexpr uint8_t CMD_GET_GENERAL_INFO2_RESPONSE = 0x57; // Response to 0x56
   constexpr uint8_t CMD_GET_GENERAL_INFO3 = 0x58;          // No authentication needed
   constexpr uint8_t CMD_GET_GENERAL_INFO3_RESPONSE = 0x59; // Response to 0x58
-
-  // Other commands observed
-  constexpr uint8_t CMD_UNKNOWN6F_REQUEST = 0x6F;  // Authentication needed
-  constexpr uint8_t CMD_UNKNOWN6F_RESPONSE = 0x70; // Response to 0x6F
+  constexpr uint8_t CMD_SET_CONFIG1 = 0x6F;                // Authentication needed
+  constexpr uint8_t CMD_SET_CONFIG1_RESPONSE = 0x70;       // Response to 0x6F
 
   constexpr uint8_t CMD_STATUS_UPDATE = 0x71;          // Sent by device to the Tahoma on channel 1/3 (when 1W is used to control the device and when controlled by Tahoma itself when shutter position is reached), authentication needed
   constexpr uint8_t CMD_STATUS_UPDATE_RESPONSE = 0x72; // Response to 0x71 by the Tahoma after authentication

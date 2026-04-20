@@ -125,9 +125,9 @@ namespace iohome
     bool process_discoveryspe_response(const IoFrame &frame, IoDevice &device)
     {
         if (frame.command_id != CMD_DISCOVER_SPE_RESPONSE)
-        return false;
+            return false;
 
-            memcpy(device.info.node_id, frame.src_node, NODE_ID_SIZE); // should not be necessary...
+        memcpy(device.info.node_id, frame.src_node, NODE_ID_SIZE); // should not be necessary...
 
         // Extract device info from frame data
         if (frame.data_len >= 2)
@@ -224,7 +224,7 @@ namespace iohome
     {
         // Initialize frame for 2W mode
         init_frame(frame);
-    
+
         // Set source and destination
         set_destination(frame, dest_node);
         set_source(frame, src_node);
@@ -362,6 +362,19 @@ namespace iohome
         set_source(frame, own_node_id);
 
         return set_command(frame, CMD_ERROR_RESPONSE, &error_code, 1);
+    }
+
+    bool create_set_config1_command(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id)
+    {
+        // Initialize frame
+        init_frame(frame, true, true, false, false);
+
+        // Set source and destination
+        set_destination(frame, dst_node_id);
+        set_source(frame, own_node_id);
+
+        uint8_t data[5] = {0xE0, 0x10, 0x0A, 0x08, 0x00};               // observed on connectivity kit at pairing, also observed E020010800
+        return set_command(frame, CMD_SET_CONFIG1, data, sizeof(data)); // device shall reply with command 0x70 and data 0x05 if OK, FE 08 if KO
     }
 
 } // namespace iohome

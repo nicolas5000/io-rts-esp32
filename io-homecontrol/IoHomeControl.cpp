@@ -577,7 +577,9 @@ namespace iohome
                   // Authenticated so reply OK and let's use the status update received from device
                   IoFrame end;
                   create_status_update_response(end, mOwnNodeId, item.frame.src_node); // reply OK
-                  TransmitFrame(end, item.frequency, SHORT_PREAMBLE_LENGTH);           // send response
+                  TransmitFrame(end, FREQUENCY_CHANNEL_1, SHORT_PREAMBLE_LENGTH);      // send response
+                  TransmitFrame(end, FREQUENCY_CHANNEL_2, SHORT_PREAMBLE_LENGTH);      // send also on other channels
+                  TransmitFrame(end, FREQUENCY_CHANNEL_3, SHORT_PREAMBLE_LENGTH);      // send also on other channels
                   UpdateDeviceStatus(item.frame);                                      // Update device status
                 }
                 else
@@ -808,6 +810,22 @@ namespace iohome
                     else
                       break;
                   }
+                }
+                // Finally try to configure device to send its status (we don't stop if refused as not all devices support it!)
+                if (create_set_config1_command(request, mOwnNodeId, device.info.node_id) && SendAndReceive(request, response, FREQUENCY_CHANNEL_2))
+                {
+                  if (response.command_id == CMD_ERROR_RESPONSE)
+                  {
+                    IO_LOGI("ConfigureDeviceToSendStatus: it seems device doesn't support this command!");
+                  }
+                  else if (response.command_id != CMD_SET_CONFIG1_RESPONSE)
+                  {
+                    IO_LOGE("ConfigureDeviceToSendStatus: unexpected response!");
+                  }
+                }
+                else
+                {
+                  IO_LOGE("ConfigureDeviceToSendStatus: failed to send request or didn't receive a response!");
                 }
               }
               else
@@ -1057,6 +1075,63 @@ namespace iohome
   {
     std::lock_guard<std::mutex> guard(sRemoteMapMutex); // Take mutex! It will be released when quitting the scope (when returning)
     sRemoteMap.erase(remoteID);
+  }
+
+  bool IoHomeControl::ConfigureDeviceToSendStatus(const std::string &deviceID)
+  {
+    if (!mInitialized || !mReceiving || mPassiveMode)
+    {
+      IO_LOGE("ConfigureDeviceToSendStatus: invalid state! (not initialized or not listening or passive mode)");
+      return false;
+    }
+    std::map<std::string, IoDevice>::iterator it = sDeviceMap.find(deviceID);
+    if (it == sDeviceMap.end())
+    {
+      IO_LOGE("ConfigureDeviceToSendStatus: no device found in list!");
+      return false;
+    }
+    else if (it->second.is_deleted)
+    {
+      IO_LOGE("ConfigureDeviceToSendStatus: device is marked as deleted, add it before using it!");
+      return false;
+    }
+    if (xSemaphoreTake(sMutex, MUTEX_MAX_WAIT_TICKS))
+    {
+      IoFrame request;
+      IoFrame response;
+      bool ret = false;
+      UBaseType_t currentPriority = uxTaskPriorityGet(NULL);
+      vTaskPrioritySet(NULL, IO_FRAME_PROCESSING_TASK); // change task priority to higher!
+      if (create_set_config1_command(request, mOwnNodeId, it->second.info.node_id) && SendAndReceive(request, response, FREQUENCY_CHANNEL_2))
+      {
+        if (response.command_id == CMD_SET_CONFIG1_RESPONSE)
+        {
+          ret = true;
+        }
+        else if (response.command_id == CMD_ERROR_RESPONSE)
+        {
+          IO_LOGE("ConfigureDeviceToSendStatus: it seems device doesn't support this command!");
+          ret = false;
+        }
+        else
+        {
+          IO_LOGE("ConfigureDeviceToSendStatus: unexpected response!");
+          ret = false;
+        }
+      }
+      else
+      {
+        IO_LOGE("ConfigureDeviceToSendStatus: failed to send request or didn't receive a response!");
+      }
+      vTaskPrioritySet(NULL, currentPriority); // restore task priority
+      xSemaphoreGive(sMutex);
+      return ret;
+    }
+    else
+    {
+      IO_LOGE("ConfigureDeviceToSendStatus: failed to take mutex!");
+      return false;
+    }
   }
 
   bool IoHomeControl::TransmitFrame(const IoFrame &ioframe, uint32_t frequency, uint16_t preamble)

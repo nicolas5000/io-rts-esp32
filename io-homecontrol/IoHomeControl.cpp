@@ -734,7 +734,10 @@ namespace iohome
   bool IoHomeControl::DiscoverAndPairDevice()
   {
     if (!mInitialized || !mReceiving || mPassiveMode)
+    {
+      IO_LOGE("DiscoverAndPairDevice: invalid state! (not initialized or not listening or passive mode)");
       return false;
+    }
 
     if (xSemaphoreTake(sMutex, MUTEX_MAX_WAIT_TICKS))
     {
@@ -1023,7 +1026,10 @@ namespace iohome
   bool IoHomeControl::ForceDeviceStatusUpdate(const std::string &deviceID)
   {
     if (!mInitialized || !mReceiving || mPassiveMode)
+    {
+      IO_LOGE("ForceDeviceStatusUpdate: invalid state! (not initialized or not listening or passive mode)");
       return false;
+    }
     std::map<std::string, IoDevice>::iterator it = sDeviceMap.find(deviceID);
     if (it == sDeviceMap.end())
     {

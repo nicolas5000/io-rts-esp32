@@ -591,7 +591,7 @@ static int do_ioconfig_cmd(int argc, char **argv)
     else if (ioconfig_args.del->count > 0)
     {
         IoHomeConfig::DeleteIoHomeConfig();
-        ESP_LOGI(TAG, "IO Home configuration restored to default values");
+        ESP_LOGI(TAG, "IO Home configuration restored to default values. New configuration will be applied after reboot!");
     }
     else
     {
@@ -678,6 +678,7 @@ static int do_ioconfig_cmd(int argc, char **argv)
                 }
             }
         }
+        ESP_LOGI(TAG, "New configuration will be applied after reboot!");
     }
     return 0;
 }

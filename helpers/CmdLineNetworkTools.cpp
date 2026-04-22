@@ -45,7 +45,7 @@ static int do_configwifi_cmd(int argc, char **argv)
     else if (configwifi_args.del->count > 0)
     {
         NetworkConfig::DeleteWifiConfig();
-        ESP_LOGI(TAG, "Wifi configuration restored to default values");
+        ESP_LOGI(TAG, "Wifi configuration restored to default values. New configuration will be applied after reboot!");
     }
     else
     {
@@ -112,6 +112,7 @@ static int do_configwifi_cmd(int argc, char **argv)
                 ESP_LOGI(TAG, "Wifi Authentication threshold set to configuration storage: %s", NetworkConfig::WifiAuthModeToString(NetworkConfig::GetWifiAuthModeThreshold()).c_str());
             }
         }
+        ESP_LOGI(TAG, "New configuration will be applied after reboot!");
     }
     return 0;
 }
@@ -181,7 +182,7 @@ static int do_config_network_cmd(int argc, char **argv)
     else if (config_network_args.del->count > 0)
     {
         NetworkConfig::DeleteNetworkConfig();
-        ESP_LOGI(TAG, "Network configuration restored to default values");
+        ESP_LOGI(TAG, "Network configuration restored to default values. New configuration will be applied after reboot!");
     }
     else
     {
@@ -283,6 +284,7 @@ static int do_config_network_cmd(int argc, char **argv)
                 ESP_LOGI(TAG, "NTP server address set to configuration storage: %s", NetworkConfig::GetSNTPAddress().c_str());
             }
         }
+        ESP_LOGI(TAG, "New configuration will be applied after reboot!");
     }
     return 0;
 }

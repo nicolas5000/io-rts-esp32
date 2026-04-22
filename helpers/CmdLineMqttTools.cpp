@@ -55,7 +55,7 @@ static int do_config_mqtt_cmd(int argc, char **argv)
     else if (config_mqtt_args.del->count > 0)
     {
         MqttConfig::DeleteMqttConfig();
-        ESP_LOGI(TAG, "MQTT configuration restored to default values");
+        ESP_LOGI(TAG, "MQTT configuration restored to default values. New configuration will be applied after reboot!");
     }
     else
     {
@@ -188,6 +188,7 @@ static int do_config_mqtt_cmd(int argc, char **argv)
                 ESP_LOGI(TAG, "Discovery prefix set to configuration storage: %s", MqttConfig::GetDiscoveryPrefix().c_str());
             }
         }
+        ESP_LOGI(TAG, "New configuration will be applied after reboot!");
     }
     return 0;
 }

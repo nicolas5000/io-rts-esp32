@@ -115,6 +115,17 @@ namespace iohome
     /// @return true on success, false on error
     bool SetDevicePosition(const std::string &deviceID, uint8_t position, bool quiet = false);
 
+    /// @brief Set tilt of an actuator (e.g., venetian blind)
+    /// @param deviceID Device ID (6 characters as hex representation of the 3 bytes, eg "112233")
+    /// @param tilt Tilt value (0 = closed, 100 = fully open)
+    /// @return true on success, false on error
+    bool SetDeviceTilt(const std::string &deviceID, uint8_t tilt);
+
+    /// @brief Check if device supports tilt based on device type
+    /// @param deviceID Device ID (6 characters as hex representation of the 3 bytes, eg "112233")
+    /// @return true if device supports tilt, false otherwise
+    bool isDeviceTiltSupported(const std::string &deviceID);
+
     /// @brief Set an actuator (e.g., blind, shutter) to its favorite position (like "My" button on Somfy remote)
     /// @param deviceID Device ID (6 characters as hex representation of the 3 bytes, eg "112233")
     /// @return

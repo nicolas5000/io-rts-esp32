@@ -167,6 +167,9 @@ namespace Helpers
 
         iohome::IoDevice &dev = storedDevice.device;
         memset(&dev, 0, sizeof(iohome::IoDevice));
+        dev.position = iohome::UNKNOWN_POSITION;
+        dev.target = iohome::UNKNOWN_POSITION;
+        dev.tilt = iohome::UNKNOWN_POSITION;
 
         // Parse name
         cJSON *nameItem = cJSON_GetObjectItem(root, "name");

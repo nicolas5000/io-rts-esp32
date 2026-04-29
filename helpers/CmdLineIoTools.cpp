@@ -746,6 +746,51 @@ void register_ioconfig(void)
     ESP_ERROR_CHECK(esp_console_cmd_register(&ioconfig_cmd));
 }
 
+// ******************* IO SET TILT ********************
+
+/// @brief Structure used by the 'io_tilt' command
+static struct
+{
+    struct arg_str *device_id;
+    struct arg_int *tilt;
+    struct arg_end *end;
+} iotilt_args;
+
+static int do_iotilt_cmd(int argc, char **argv)
+{
+    int nerrors = arg_parse(argc, argv, (void **)&iotilt_args);
+    if (nerrors != 0)
+    {
+        arg_print_errors(stderr, iotilt_args.end, argv[0]);
+        return 1;
+    }
+    if (iotilt_args.tilt->ival[0] >= 0 && iotilt_args.tilt->ival[0] <= 100)
+    {
+        sIoHome->SetDeviceTilt(iotilt_args.device_id->sval[0], iotilt_args.tilt->ival[0]);
+    }
+    else
+        ESP_LOGE(TAG, "Invalid value for <tilt>");
+    return 0;
+}
+
+void register_iotilt(void)
+{
+    iotilt_args.device_id = arg_str1(NULL, NULL, "<deviceid>", "ID of the device, 3 bytes (eg 112233)");
+    iotilt_args.tilt = arg_int1(NULL, NULL, "<tilt>", "Specify the tilt (0 = CLOSED to 100 = OPEN)");
+    iotilt_args.end = arg_end(2);
+
+    const esp_console_cmd_t iotilt_cmd = {
+        .command = "io_tilt",
+        .help = "Set an IO-HomeControl device to a specified tilt angle",
+        .hint = NULL,
+        .func = &do_iotilt_cmd,
+        .argtable = &iotilt_args,
+        .func_w_context = NULL,
+        .context = NULL};
+
+    ESP_ERROR_CHECK(esp_console_cmd_register(&iotilt_cmd));
+}
+
 // ******************* IO Register commands ********************
 
 void register_io_cmdline_tools(IoRts::IoRtsManager *io_rts_manager)
@@ -768,4 +813,5 @@ void register_io_cmdline_tools(IoRts::IoRtsManager *io_rts_manager)
     register_ioinvertdevice();
     register_iosendraw();
     register_ioconfig();
+    register_iotilt();
 }

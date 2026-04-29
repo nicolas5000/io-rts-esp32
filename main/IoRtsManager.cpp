@@ -41,9 +41,9 @@ namespace IoRts
 
     static void deviceStatusCallback(const std::string deviceID, const iohome::IoDevice &device)
     {
-        ESP_LOGI(TAG, "Callback received device status for %s: %s (0x%02X/0x%02X) / Position %.1f / Target %0.1f / Moving: %s / Inverted: %s / Deleted: %s",
+        ESP_LOGI(TAG, "Callback received device status for %s: %s (0x%02X/0x%02X) / Position %.1f / Target %0.1f / Tilt %.1f / Moving: %s / Inverted: %s / Deleted: %s",
                  deviceID.c_str(), device.info.name, device.info.device_type, device.info.device_subtype,
-                 device.position, device.target,
+                 device.position, device.target, device.tilt,
                  device.is_stopped ? "No" : "Yes", device.info.is_openclose_inverted ? "Yes" : "No", device.is_deleted ? "Yes" : "No");
         if (sIoRtsManager == nullptr)
             return;
@@ -100,6 +100,7 @@ namespace IoRts
                 it->second.next_status_update_timestamp = device.next_status_update_timestamp;
                 it->second.position = device.position;
                 it->second.target = device.target;
+                it->second.tilt = device.tilt;
                 // Update storage when static device info changed (name, type, ...)
                 if (sendDiscovery)
                 {

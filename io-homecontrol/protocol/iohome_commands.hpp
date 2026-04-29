@@ -18,12 +18,28 @@ namespace iohome
     /// @return true on success
     bool create_execute_request(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id, bool is_low_power, uint8_t position, bool quiet = false);
 
+    /// @brief Create an execute tilt IO Frame (0x00) - Sets tilt position without changing cover position
+    /// @param frame Output IoFrame structure
+    /// @param own_node_id Source node ID (3 bytes)
+    /// @param dst_node_id Destination node ID (3 bytes) for output frame to create
+    /// @param is_low_power 'Low power' flag to set
+    /// @param tilt_percent Tilt percentage (0 = closed, 100 = fully open)
+    /// @return true on success
+    bool create_execute_tilt_request(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id, bool is_low_power, uint8_t tilt_percent);
+
     /// @brief Create a GetStatus IO Frame (0x03)
     /// @param frame Output IoFrame structure
     /// @param own_node_id Source node ID (3 bytes)
     /// @param dst_node_id Destination node ID (3 bytes) for output frame to create
     /// @return true on success
     bool create_getstatus03_request(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id);
+
+    /// @brief Create a GetStatus IO Frame (0x03) with tilt info request
+    /// @param frame Output IoFrame structure
+    /// @param own_node_id Source node ID (3 bytes)
+    /// @param dst_node_id Destination node ID (3 bytes) for output frame to create
+    /// @return true on success
+    bool create_getstatus03_tilt_request(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id);
 
     /// @brief Create a Discovery IO Frame (0x28)
     /// @param frame Output IoFrame structure

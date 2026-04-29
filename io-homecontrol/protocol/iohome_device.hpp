@@ -28,9 +28,27 @@ namespace iohome
         IoDeviceInformation info;             // Device static information (no changes during use)
         float position;                       // Position between 0.0 and 100.0 or UNKNOWN_POSITION if unknown. 0 is open / 0% closed / light on / switch on, 100 is 100% closed / light off / switch off.
         float target;                         // Position between 0.0 and 100.0 or UNKNOWN_POSITION if unknown. 0 is open / 0% closed / light on / switch on, 100 is 100% closed / light off / switch off.
+        float tilt;                           // Tilt between 0.0 (closed) and 100.0 (fully open) or UNKNOWN_POSITION if unknown/unsupported.
         bool is_stopped;                      // true if stopped, false if moving.
         bool is_deleted;                      // true if device has been deleted (will not be created at next boot)
         int64_t last_status_timestamp;        // Timestamp of the last received status, in us (use esp_timer_get_time() to fill and compare to local date&time!)
         int64_t next_status_update_timestamp; // Timestamp of the next planned status update, in us (use esp_timer_get_time() to fill and compare to local date&time!)
     };
+
+    /// @brief Check if a device type supports tilt control
+    /// @param type Device type
+    /// @return true if the device type supports tilt
+    inline bool deviceTypeSupportsTilt(DeviceType type)
+    {
+        switch (type)
+        {
+        case DeviceType::VENETIAN_BLIND:
+        case DeviceType::EXTERNAL_VENETIAN_BLIND:
+        case DeviceType::LOUVRE_BLIND:
+        case DeviceType::BLIND:
+            return true;
+        default:
+            return false;
+        }
+    }
 } // namespace iohome

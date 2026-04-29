@@ -16,9 +16,11 @@ static const std::string MQTT_CERTIFICATE_BEGIN = "-----BEGIN CERTIFICATE-----\n
 static const std::string MQTT_CERTIFICATE_END = "\n-----END CERTIFICATE-----";
 static const std::string MQTT_CLIENT_COMMAND_TOPIC = "/set";                   // command topic
 static const std::string MQTT_CLIENT_COMMAND_POSITION_TOPIC = "/set_position"; // position topic
+static const std::string MQTT_CLIENT_COMMAND_TILT_TOPIC = "/set_tilt";         // tilt topic
 static const std::string MQTT_CLIENT_COMMAND_FAV_POS_TOPIC = "/set_fav_pos";   // set favorite position topic
 static const std::string MQTT_CLIENT_STATE_TOPIC = "/state";                   // state topic
 static const std::string MQTT_CLIENT_POSITION_TOPIC = "/position";             // position topic
+static const std::string MQTT_CLIENT_TILT_TOPIC = "/tilt";                     // tilt topic
 static const std::string MQTT_CLIENT_DISCOVERY_TOPIC = "/config";              // discovery topic
 
 static const std::string MQTT_CLIENT_REBOOT_ID = "button_reboot";     // unique id and topic for "reboot" button
@@ -97,6 +99,8 @@ namespace Helpers
             msg_id = esp_mqtt_client_subscribe(client, topic.c_str(), 0);
             topic = mqttHelper->GetTopicPrefix() + "/+" + MQTT_CLIENT_COMMAND_FAV_POS_TOPIC;
             msg_id = esp_mqtt_client_subscribe(client, topic.c_str(), 0);
+            topic = mqttHelper->GetTopicPrefix() + "/+" + MQTT_CLIENT_COMMAND_TILT_TOPIC;
+            msg_id = esp_mqtt_client_subscribe(client, topic.c_str(), 0);
             break;
         }
         case MQTT_EVENT_DISCONNECTED:
@@ -121,7 +125,7 @@ namespace Helpers
             // Is it a command for us?
             const std::string topic_str(event->topic, event->topic_len);
             if (topic_str.starts_with(mqttHelper->GetTopicPrefix()) &&
-                (topic_str.ends_with(MQTT_CLIENT_COMMAND_TOPIC) || topic_str.ends_with(MQTT_CLIENT_COMMAND_POSITION_TOPIC) || topic_str.ends_with(MQTT_CLIENT_COMMAND_FAV_POS_TOPIC)))
+                (topic_str.ends_with(MQTT_CLIENT_COMMAND_TOPIC) || topic_str.ends_with(MQTT_CLIENT_COMMAND_POSITION_TOPIC) || topic_str.ends_with(MQTT_CLIENT_COMMAND_FAV_POS_TOPIC) || topic_str.ends_with(MQTT_CLIENT_COMMAND_TILT_TOPIC)))
             {
                 size_t id_len = 0;
                 if (topic_str.ends_with(MQTT_CLIENT_COMMAND_TOPIC))
@@ -130,6 +134,8 @@ namespace Helpers
                     id_len = topic_str.length() - mqttHelper->GetTopicPrefix().length() - MQTT_CLIENT_COMMAND_POSITION_TOPIC.length() - 1;
                 else if (topic_str.ends_with(MQTT_CLIENT_COMMAND_FAV_POS_TOPIC))
                     id_len = topic_str.length() - mqttHelper->GetTopicPrefix().length() - MQTT_CLIENT_COMMAND_FAV_POS_TOPIC.length() - 1;
+                else if (topic_str.ends_with(MQTT_CLIENT_COMMAND_TILT_TOPIC))
+                    id_len = topic_str.length() - mqttHelper->GetTopicPrefix().length() - MQTT_CLIENT_COMMAND_TILT_TOPIC.length() - 1;
                 if (id_len > 0)
                 {
                     std::string entity_id = topic_str.substr(mqttHelper->GetTopicPrefix().length() + 1, id_len);
@@ -348,6 +354,16 @@ namespace Helpers
                             {
                                 // ESP_LOGI(TAG, "Received 'set favorite position' for device %s", deviceID.c_str());
                                 mqttHelper->GetIoRtsManager()->mIoHome->SetDeviceToFavoritePosition(deviceID);
+                            }
+                            else if (topic_str.ends_with(MQTT_CLIENT_COMMAND_TILT_TOPIC)) // it should be a tilt between 0 and 100
+                            {
+                                float tilt = strtof(command.c_str(), NULL);
+                                if (tilt >= (float)0.0 && tilt <= (float)100.0)
+                                {
+                                    mqttHelper->GetIoRtsManager()->mIoHome->SetDeviceTilt(deviceID, (uint8_t)tilt);
+                                }
+                                else
+                                    ESP_LOGE(TAG, "Received command %s for device %s -> invalid tilt!", command.c_str(), deviceID.c_str());
                             }
                             else
                             {
@@ -673,6 +689,8 @@ namespace Helpers
                         std::string device_state_topic = GetTopicPrefix() + "/" + device_id + MQTT_CLIENT_STATE_TOPIC;
                         std::string device_position_topic = GetTopicPrefix() + "/" + device_id + MQTT_CLIENT_POSITION_TOPIC;
                         std::string device_cmd_position_topic = GetTopicPrefix() + "/" + device_id + MQTT_CLIENT_COMMAND_POSITION_TOPIC;
+                        std::string device_tilt_topic = GetTopicPrefix() + "/" + device_id + MQTT_CLIENT_TILT_TOPIC;
+                        std::string device_cmd_tilt_topic = GetTopicPrefix() + "/" + device_id + MQTT_CLIENT_COMMAND_TILT_TOPIC;
                         std::string device_cmd_fav_pos_topic = GetTopicPrefix() + "/" + device_id + MQTT_CLIENT_COMMAND_FAV_POS_TOPIC;
                         std::string device_plateform;
                         cmp = cJSON_AddObjectToObject(cmps, device_id.c_str());
@@ -714,6 +732,16 @@ namespace Helpers
                                     }
                                     error = error || (cJSON_AddStringToObject(cmp, "position_topic", device_position_topic.c_str()) == NULL);         // position_topic
                                     error = error || (cJSON_AddStringToObject(cmp, "set_position_topic", device_cmd_position_topic.c_str()) == NULL); // set_position_topic
+                                    // add tilt topics if device supports tilt
+                                    if (iohome::deviceTypeSupportsTilt(it->second.info.device_type))
+                                    {
+                                        error = error || (cJSON_AddStringToObject(cmp, "tilt_status_topic", device_tilt_topic.c_str()) == NULL);       // tilt_status_topic
+                                        error = error || (cJSON_AddStringToObject(cmp, "tilt_command_topic", device_cmd_tilt_topic.c_str()) == NULL);  // tilt_command_topic
+                                        error = error || (cJSON_AddNumberToObject(cmp, "tilt_closed_value", 0) == NULL);                              // tilt_closed_value
+                                        error = error || (cJSON_AddNumberToObject(cmp, "tilt_opened_value", 100) == NULL);                            // tilt_opened_value
+                                        error = error || (cJSON_AddNumberToObject(cmp, "tilt_min", 0) == NULL);                                      // tilt_min
+                                        error = error || (cJSON_AddNumberToObject(cmp, "tilt_max", 100) == NULL);                                    // tilt_max
+                                    }
                                     // add device_class https://www.home-assistant.io/integrations/cover/#device_class
                                     std::string type = "shutter";
                                     switch (it->second.info.device_type)
@@ -876,6 +904,11 @@ namespace Helpers
                 // device is marked as deleted, send empty messages to remove all retained messages for this device
                 esp_mqtt_client_publish(mMqttClientHandle, stateTopic.c_str(), NULL, 0, 0, 1);
                 esp_mqtt_client_publish(mMqttClientHandle, positionTopic.c_str(), NULL, 0, 0, 1);
+                if (iohome::deviceTypeSupportsTilt(device->second.info.device_type))
+                {
+                    std::string tiltTopic = GetTopicPrefix() + "/" + MQTT_CLIENT_PREFIX_IO + device->first + MQTT_CLIENT_TILT_TOPIC;
+                    esp_mqtt_client_publish(mMqttClientHandle, tiltTopic.c_str(), NULL, 0, 0, 1);
+                }
                 return;
             }
             switch (device->second.info.device_type)
@@ -925,6 +958,13 @@ namespace Helpers
                             data = device->second.info.is_openclose_inverted ? "opening" : "closing";
                     }
                     esp_mqtt_client_publish(mMqttClientHandle, stateTopic.c_str(), data.c_str(), 0, 0, 1);
+                    // send tilt if device supports it
+                    if (iohome::deviceTypeSupportsTilt(device->second.info.device_type) && device->second.tilt != UNKNOWN_POSITION)
+                    {
+                        std::string tiltTopic = GetTopicPrefix() + "/" + MQTT_CLIENT_PREFIX_IO + device->first + MQTT_CLIENT_TILT_TOPIC;
+                        data = std::to_string((int)device->second.tilt);
+                        esp_mqtt_client_publish(mMqttClientHandle, tiltTopic.c_str(), data.c_str(), 0, 0, 1);
+                    }
                 }
                 else
                 {

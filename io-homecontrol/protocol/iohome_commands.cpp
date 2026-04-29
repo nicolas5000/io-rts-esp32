@@ -46,6 +46,34 @@ namespace iohome
         return set_command(frame, CMD_EXECUTE_REQUEST, data, param_len);
     }
 
+    bool create_execute_tilt_request(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id, bool is_low_power, uint8_t tilt_percent)
+    {
+        // Initialize frame
+        init_frame(frame, true, true, false, is_low_power);
+
+        // Set source and destination
+        set_destination(frame, dst_node_id);
+        set_source(frame, own_node_id);
+
+        // Set data - tilt command uses 8-byte payload with D2 marker
+        // Format: 01 E7 D2 00 20 TT TT 00
+        // Where TTTT = tilt as "closed percentage" of 0xC800
+        // tilt_percent is "open" percentage (0=closed, 100=open), so we invert it
+        uint8_t data[8];
+        data[0] = 0x01; // Command Originator => User Remote Control
+        data[1] = 0xE7; // ACEI => same as captured tilt commands
+        data[2] = CMD_PARAM_POSITION_STOP; // 0xD2 = STOP_POSITION parameter marker
+        data[3] = 0x00;
+        data[4] = 0x20; // separator/flag (as observed in captures)
+        // Convert open percentage to closed value: closed_value = (100 - tilt_percent) * 0xC800 / 100
+        uint16_t tilt_value = (uint16_t)((100 - tilt_percent) * CMD_PARAM_STATUS_POS_MAX / 100);
+        data[5] = (tilt_value >> 8) & 0xFF;
+        data[6] = tilt_value & 0xFF;
+        data[7] = 0x00;
+
+        return set_command(frame, CMD_EXECUTE_REQUEST, data, 8);
+    }
+
     bool create_getstatus03_request(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id)
     {
         // Initialize frame
@@ -59,6 +87,22 @@ namespace iohome
         uint8_t data[3] = {0x03, 0x00, 0x00};
 
         return set_command(frame, CMD_PRIVATE, data, 3);
+    }
+
+    bool create_getstatus03_tilt_request(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id)
+    {
+        // Initialize frame - same as regular status but with extended data to request tilt info
+        init_frame(frame, true, true, false, true);
+
+        // Set source and destination
+        set_destination(frame, dst_node_id);
+        set_source(frame, own_node_id);
+
+        // Set data: 03 20 01 00 - requests tilt-extended status response (16 bytes)
+        // This is what the Tahoma sends to get tilt info from venetian blind devices
+        uint8_t data[4] = {0x03, 0x20, 0x01, 0x00};
+
+        return set_command(frame, CMD_PRIVATE, data, 4);
     }
 
     bool create_discovery_request(IoFrame &frame, const uint8_t *own_node_id)

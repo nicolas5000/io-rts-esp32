@@ -656,7 +656,12 @@ namespace iohome
             {
               IoFrame request;
               IoFrame response;
-              if (create_getstatus03_request(request, mOwnNodeId, it->second.info.node_id) && SendAndReceive(request, response, FREQUENCY_CHANNEL_2))
+              bool reqOk;
+              if (deviceTypeSupportsTilt(it->second.info.device_type))
+                reqOk = create_getstatus03_tilt_request(request, mOwnNodeId, it->second.info.node_id);
+              else
+                reqOk = create_getstatus03_request(request, mOwnNodeId, it->second.info.node_id);
+              if (reqOk && SendAndReceive(request, response, FREQUENCY_CHANNEL_2))
               {
                 UpdateDeviceStatus(response);
               }
@@ -691,6 +696,7 @@ namespace iohome
       device.is_deleted = false;
       device.position = UNKNOWN_POSITION;
       device.target = UNKNOWN_POSITION;
+      device.tilt = UNKNOWN_POSITION;
       HexStringToBuff(deviceID, device.info.node_id, NODE_ID_SIZE);
       sDeviceMap.insert({deviceID, device});
     }
@@ -911,6 +917,70 @@ namespace iohome
       IO_LOGE("SetDevicePosition: failed to take mutex!");
       return false;
     }
+  }
+
+  bool IoHomeControl::SetDeviceTilt(const std::string &deviceID, uint8_t tilt)
+  {
+    if (!mInitialized || !mReceiving || mPassiveMode)
+    {
+      IO_LOGE("SetDeviceTilt: invalid state! (not initialized or not listening or passive mode)");
+      return false;
+    }
+    std::map<std::string, IoDevice>::iterator it = sDeviceMap.find(deviceID);
+    if (it == sDeviceMap.end())
+    {
+      IO_LOGE("SetDeviceTilt: no device found in list!");
+      return false;
+    }
+    else if (it->second.is_deleted)
+    {
+      IO_LOGE("SetDeviceTilt: device is marked as deleted, add it before using it!");
+      return false;
+    }
+    if (!deviceTypeSupportsTilt(it->second.info.device_type))
+    {
+      IO_LOGE("SetDeviceTilt: device ({}) doesn't support tilt!", deviceID);
+      return false;
+    }
+    if (tilt > 100)
+    {
+      IO_LOGE("SetDeviceTilt: invalid tilt value! (0-100)");
+      return false;
+    }
+    IO_LOGI("Setting tilt to {}%", tilt);
+    if (xSemaphoreTake(sMutex, MUTEX_MAX_WAIT_TICKS))
+    {
+      IoFrame request;
+      IoFrame response;
+      bool ret = false;
+      UBaseType_t currentPriority = uxTaskPriorityGet(NULL);
+      vTaskPrioritySet(NULL, IO_FRAME_PROCESSING_TASK); // change task priority to higher!
+      if (create_execute_tilt_request(request, mOwnNodeId, it->second.info.node_id, true, tilt) && SendAndReceive(request, response, FREQUENCY_CHANNEL_2))
+      {
+        UpdateDeviceStatus(response);
+        ret = true;
+      }
+      else
+      {
+        IO_LOGE("SetDeviceTilt: failed to send request!");
+      }
+      vTaskPrioritySet(NULL, currentPriority); // restore task priority
+      xSemaphoreGive(sMutex);
+      return ret;
+    }
+    else
+    {
+      IO_LOGE("SetDeviceTilt: failed to take mutex!");
+      return false;
+    }
+  }
+
+  bool IoHomeControl::isDeviceTiltSupported(const std::string &deviceID)
+  {
+    std::map<std::string, IoDevice>::iterator it = sDeviceMap.find(deviceID);
+    if (it == sDeviceMap.end())
+      return false;
+    return deviceTypeSupportsTilt(it->second.info.device_type);
   }
 
   bool IoHomeControl::OpenDevice(const std::string &deviceID, bool quiet)
@@ -1486,27 +1556,78 @@ namespace iohome
       {
         deviceIt->second.is_stopped = (statusFrame.data[0] & CMD_PARAM_STATUS_STOPPED) ? true : false;
         deviceIt->second.last_status_timestamp = esp_timer_get_time();
-        uint16_t tmpTargetPos = statusFrame.data[2] << 8 | statusFrame.data[3];
-        uint16_t tmpCurrentPos = statusFrame.data[4] << 8 | statusFrame.data[5];
-        if (tmpTargetPos <= CMD_PARAM_STATUS_POS_MAX)
-          deviceIt->second.target = tmpTargetPos * 100.0 / CMD_PARAM_STATUS_POS_MAX;
-        else
-          deviceIt->second.target = UNKNOWN_POSITION; // No clue...
-        if (tmpCurrentPos <= CMD_PARAM_STATUS_POS_MAX)
-          deviceIt->second.position = tmpCurrentPos * 100.0 / CMD_PARAM_STATUS_POS_MAX;
+
+        // Check if byte[2] is the D2 (STOP_POSITION) parameter marker
+        // When D2 is present, it means the last operation was tilt-related and bytes 2-3 are NOT a target position
+        bool isTiltResponse = (statusFrame.data[2] == CMD_PARAM_POSITION_STOP);
+
+        if (statusFrame.data_len >= 16 && isTiltResponse)
+        {
+          // 16-byte tilt-extended response format (from 03200100 status query):
+          // [0] status, [1] flags, [2] D2, [3] 00, [4-5] current position,
+          // [6-7] unknown, [8-10] originator, [11] 01, [12] 20, [13-14] tilt value, [15] 00
+          uint16_t tmpCurrentPos = statusFrame.data[4] << 8 | statusFrame.data[5];
+          if (tmpCurrentPos <= CMD_PARAM_STATUS_POS_MAX)
+          {
+            deviceIt->second.position = tmpCurrentPos * 100.0 / CMD_PARAM_STATUS_POS_MAX;
+            if (deviceIt->second.is_stopped)
+              deviceIt->second.target = deviceIt->second.position; // Tilt operation complete, position target = current
+          }
+          uint16_t tmpTiltClosed = statusFrame.data[13] << 8 | statusFrame.data[14];
+          if (tmpTiltClosed <= CMD_PARAM_STATUS_POS_MAX)
+            deviceIt->second.tilt = 100.0 - (tmpTiltClosed * 100.0 / CMD_PARAM_STATUS_POS_MAX); // Convert from "closed %" to "open %"
+          else
+            deviceIt->second.tilt = UNKNOWN_POSITION;
+        }
+        else if (!isTiltResponse)
+        {
+          // Standard 14-byte position response format:
+          // [0] status, [1] flags, [2-3] target position, [4-5] current position,
+          // [6-7] timer, [8-10] originator, [11] 01, [12-13] tilt (closed %) for tilt devices, else zero
+          uint16_t tmpTargetPos = statusFrame.data[2] << 8 | statusFrame.data[3];
+          uint16_t tmpCurrentPos = statusFrame.data[4] << 8 | statusFrame.data[5];
+          if (tmpTargetPos <= CMD_PARAM_STATUS_POS_MAX)
+            deviceIt->second.target = tmpTargetPos * 100.0 / CMD_PARAM_STATUS_POS_MAX;
+          else
+            deviceIt->second.target = UNKNOWN_POSITION;
+          if (tmpCurrentPos <= CMD_PARAM_STATUS_POS_MAX)
+            deviceIt->second.position = tmpCurrentPos * 100.0 / CMD_PARAM_STATUS_POS_MAX;
+          else
+          {
+            // Current position is unknown... let's try to guess it
+            if (deviceIt->second.is_stopped)
+            {
+              if (tmpTargetPos <= CMD_PARAM_STATUS_POS_MAX)
+                deviceIt->second.position = deviceIt->second.target;
+              else
+                deviceIt->second.position = UNKNOWN_POSITION;
+            }
+          }
+          // Extract tilt from bytes [12-13] for tilt-capable devices
+          if (statusFrame.data_len >= 14 && deviceTypeSupportsTilt(deviceIt->second.info.device_type))
+          {
+            uint16_t tmpTiltClosed = statusFrame.data[12] << 8 | statusFrame.data[13];
+            if (tmpTiltClosed <= CMD_PARAM_STATUS_POS_MAX)
+              deviceIt->second.tilt = 100.0 - (tmpTiltClosed * 100.0 / CMD_PARAM_STATUS_POS_MAX);
+            else
+              deviceIt->second.tilt = UNKNOWN_POSITION;
+          }
+        }
         else
         {
-          // Current position is unknown... let's try to guess it
-          if (deviceIt->second.is_stopped)
+          // 14-byte tilt response (byte[2]=D2, data_len < 16): immediate response to tilt command
+          // [0] status, [1] flags, [2] D2, [3] 00, [4-5] current position,
+          // [6-7] unknown, [8-10] originator, [11] 01, [12-13] unknown/zero
+          // Don't overwrite target from bytes 2-3 (D2 marker, not a position)
+          uint16_t tmpCurrentPos = statusFrame.data[4] << 8 | statusFrame.data[5];
+          if (tmpCurrentPos <= CMD_PARAM_STATUS_POS_MAX)
           {
-            // let's use target position (if valid) as we have reached it
-            if (tmpTargetPos <= CMD_PARAM_STATUS_POS_MAX)
-              deviceIt->second.position = deviceIt->second.target;
-            else
-              deviceIt->second.position = UNKNOWN_POSITION; // No clue...
+            deviceIt->second.position = tmpCurrentPos * 100.0 / CMD_PARAM_STATUS_POS_MAX;
+            if (deviceIt->second.is_stopped)
+              deviceIt->second.target = deviceIt->second.position; // Tilt operation complete, position target = current
           }
-          // else: we will see when target will be reached. Keep current value for now!
         }
+
         // When do we want to update next time?
         if (deviceIt->second.is_stopped)
         {
@@ -1646,9 +1767,16 @@ namespace iohome
         expectedResponseID = CMD_GET_GENERAL_INFO3_RESPONSE;
         break;
       case CMD_PRIVATE:
-        ret = create_getstatus03_request(request, mOwnNodeId, tmpDeviceId);
+      {
+        // Use tilt-extended status request for devices that support tilt
+        auto it = sDeviceMap.find(deviceID);
+        if (it != sDeviceMap.end() && deviceTypeSupportsTilt(it->second.info.device_type))
+          ret = create_getstatus03_tilt_request(request, mOwnNodeId, tmpDeviceId);
+        else
+          ret = create_getstatus03_request(request, mOwnNodeId, tmpDeviceId);
         expectedResponseID = CMD_PRIVATE_RESPONSE;
         break;
+      }
       default:
         break;
       }

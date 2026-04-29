@@ -463,428 +463,502 @@ namespace Helpers
     void MqttHelpers::SendDiscovery()
     {
         // See https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery
+        // Controller and IO devices are separate HA devices.
+        // IO devices link back to the controller via "via_device".
+        SendControllerDiscovery();
+        if (!mIsIoHomePassive)
+            SendIoDevicesDiscovery();
+    }
+    void MqttHelpers::SendControllerDiscovery()
+    {
         bool error = false;
-        cJSON *discovery = NULL;
-        cJSON *dev = NULL;
-        cJSON *o = NULL;
-        cJSON *cmps = NULL;
-        cJSON *cmp = NULL;
         std::string clientId = MqttConfig::GetClientId();
-        // Create Discovery JSON
-        discovery = cJSON_CreateObject();
+        std::string availability_topic = mTopicPrefix + MQTT_CLIENT_BIRTH_WILL_TOPIC;
+        const esp_app_desc_t *desc = esp_app_get_description();
+
+        cJSON *discovery = cJSON_CreateObject();
         if (discovery == NULL)
+            return;
+
+        // "dev" section — the controller
+        cJSON *dev = cJSON_AddObjectToObject(discovery, "dev");
+        if (dev == NULL)
             error = true;
-        // Create "dev" (device) section
-        if (!error)
+        else
         {
-            dev = cJSON_AddObjectToObject(discovery, "dev");
-            if (dev == NULL)
-                error = true;
-            else
-            {
-                error = error || (cJSON_AddStringToObject(dev, "ids", clientId.c_str()) == NULL);  // identifiers
-                error = error || (cJSON_AddStringToObject(dev, "name", clientId.c_str()) == NULL); // name
-                error = error || (cJSON_AddStringToObject(dev, "mf", "nicolas5000") == NULL);      // manufacturer
-            }
+            error = error || (cJSON_AddStringToObject(dev, "ids", clientId.c_str()) == NULL);  // identifiers
+            error = error || (cJSON_AddStringToObject(dev, "name", clientId.c_str()) == NULL); // name
+            error = error || (cJSON_AddStringToObject(dev, "mf", "nicolas5000") == NULL);      // manufacturer
+            error = error || (cJSON_AddStringToObject(dev, "sw", desc->version) == NULL);      // sw_version
         }
-        // Create "o" (origin) section
+
+        // "o" (origin) section
         if (!error)
         {
-            o = cJSON_AddObjectToObject(discovery, "o");
+            cJSON *o = cJSON_AddObjectToObject(discovery, "o");
             if (o == NULL)
                 error = true;
             else
             {
                 error = error || (cJSON_AddStringToObject(o, "name", clientId.c_str()) == NULL);                             // name
                 error = error || (cJSON_AddStringToObject(o, "url", "https://github.com/nicolas5000/io-rts-esp32") == NULL); // support_url
-                const esp_app_desc_t *desc = esp_app_get_description();
-                error = error || (cJSON_AddStringToObject(o, "sw", desc->version) == NULL); // sw_version
+                error = error || (cJSON_AddStringToObject(o, "sw", desc->version) == NULL);                                  // sw_version
             }
         }
-        // Create "cmps" section
+
+        // "cmps" section — controller components only
+        cJSON *cmps = NULL;
         if (!error)
         {
             cmps = cJSON_AddObjectToObject(discovery, "cmps");
             if (cmps == NULL)
                 error = true;
+        }
+        if (!error)
+        {
+            // Add reboot button
+            cJSON *cmp = cJSON_AddObjectToObject(cmps, "reboot");
+            if (cmp == NULL)
+                error = true;
             else
             {
-                // Add reboot button
-                cmp = cJSON_AddObjectToObject(cmps, "reboot");
-                if (cmp == NULL)
-                    error = true;
-                else
-                {
-                    error = error || (cJSON_AddStringToObject(cmp, "p", "button") == NULL);                              // platform
-                    error = error || (cJSON_AddStringToObject(cmp, "unique_id", MQTT_CLIENT_REBOOT_ID.c_str()) == NULL); // unique_id
-                    error = error || (cJSON_AddStringToObject(cmp, "name", "Reboot") == NULL);                           // name
-                    std::string reboot_topic = mTopicPrefix + "/" + MQTT_CLIENT_REBOOT_ID + MQTT_CLIENT_COMMAND_TOPIC;
-                    error = error || (cJSON_AddStringToObject(cmp, "command_topic", reboot_topic.c_str()) == NULL); // command_topic
-                }
-                // Add "IoLogging" switch https://www.home-assistant.io/integrations/switch.mqtt/
-                cmp = cJSON_AddObjectToObject(cmps, MQTT_CLIENT_IO_LOGGING_ID.c_str());
-                if (cmp == NULL)
-                    error = true;
-                else
-                {
-                    error = error || (cJSON_AddStringToObject(cmp, "p", "switch") == NULL);                                  // platform
-                    error = error || (cJSON_AddStringToObject(cmp, "unique_id", MQTT_CLIENT_IO_LOGGING_ID.c_str()) == NULL); // unique_id
-                    error = error || (cJSON_AddStringToObject(cmp, "name", "Enable IO logging") == NULL);                    // name
-                    error = error || (cJSON_AddBoolToObject(cmp, "optimistic", true) == NULL);                               // optimistic
-                    std::string state_topic = mTopicPrefix + "/" + MQTT_CLIENT_CONFIG_IO_ID + MQTT_CLIENT_STATE_TOPIC;
-                    error = error || (cJSON_AddStringToObject(cmp, "state_topic", state_topic.c_str()) == NULL); // state_topic
-                    std::string value_template = "{{ value_json." + MQTT_CLIENT_IO_LOGGING_ID + " }}";
-                    error = error || (cJSON_AddStringToObject(cmp, "value_template", value_template.c_str()) == NULL); // value_template
-                    std::string command_topic = mTopicPrefix + "/" + MQTT_CLIENT_CONFIG_IO_ID + MQTT_CLIENT_COMMAND_TOPIC;
-                    error = error || (cJSON_AddStringToObject(cmp, "command_topic", command_topic.c_str()) == NULL); // command_topic
-                    std::string command_template = "{\"" + MQTT_CLIENT_IO_LOGGING_ID + "\": \"{{ value }}\"}";
-                    error = error || (cJSON_AddStringToObject(cmp, "command_template", command_template.c_str()) == NULL); // command_template
-                }
-                // Add "IoPassive" switch https://www.home-assistant.io/integrations/switch.mqtt/
-                cmp = cJSON_AddObjectToObject(cmps, MQTT_CLIENT_IO_PASSIVE_ID.c_str());
-                if (cmp == NULL)
-                    error = true;
-                else
-                {
-                    error = error || (cJSON_AddStringToObject(cmp, "p", "switch") == NULL);                                  // platform
-                    error = error || (cJSON_AddStringToObject(cmp, "unique_id", MQTT_CLIENT_IO_PASSIVE_ID.c_str()) == NULL); // unique_id
-                    error = error || (cJSON_AddStringToObject(cmp, "name", "Enable IO Passive mode") == NULL);               // name
-                    error = error || (cJSON_AddBoolToObject(cmp, "optimistic", true) == NULL);                               // optimistic
-                    std::string state_topic = mTopicPrefix + "/" + MQTT_CLIENT_CONFIG_IO_ID + MQTT_CLIENT_STATE_TOPIC;
-                    error = error || (cJSON_AddStringToObject(cmp, "state_topic", state_topic.c_str()) == NULL); // state_topic
-                    std::string value_template = "{{ value_json." + MQTT_CLIENT_IO_PASSIVE_ID + " }}";
-                    error = error || (cJSON_AddStringToObject(cmp, "value_template", value_template.c_str()) == NULL); // value_template
-                    std::string command_topic = mTopicPrefix + "/" + MQTT_CLIENT_CONFIG_IO_ID + MQTT_CLIENT_COMMAND_TOPIC;
-                    error = error || (cJSON_AddStringToObject(cmp, "command_topic", command_topic.c_str()) == NULL); // command_topic
-                    std::string command_template = "{\"" + MQTT_CLIENT_IO_PASSIVE_ID + "\": \"{{ value }}\"}";
-                    error = error || (cJSON_AddStringToObject(cmp, "command_template", command_template.c_str()) == NULL); // command_template
-                }
-                // Add "IoTxPower" number https://www.home-assistant.io/integrations/number.mqtt/
-                cmp = cJSON_AddObjectToObject(cmps, MQTT_CLIENT_IO_TX_POWER_ID.c_str());
-                if (cmp == NULL)
-                    error = true;
-                else
-                {
-                    error = error || (cJSON_AddStringToObject(cmp, "p", "number") == NULL);                                   // platform
-                    error = error || (cJSON_AddStringToObject(cmp, "unique_id", MQTT_CLIENT_IO_TX_POWER_ID.c_str()) == NULL); // unique_id
-                    error = error || (cJSON_AddStringToObject(cmp, "name", "IO Tx Power") == NULL);                           // name
-                    error = error || (cJSON_AddBoolToObject(cmp, "optimistic", true) == NULL);                                // optimistic
-                    error = error || (cJSON_AddNumberToObject(cmp, "min", 0) == NULL);                                        // min
-                    error = error || (cJSON_AddNumberToObject(cmp, "max", 20) == NULL);                                       // max
-                    std::string state_topic = mTopicPrefix + "/" + MQTT_CLIENT_CONFIG_IO_ID + MQTT_CLIENT_STATE_TOPIC;
-                    error = error || (cJSON_AddStringToObject(cmp, "state_topic", state_topic.c_str()) == NULL); // state_topic
-                    std::string value_template = "{{ value_json." + MQTT_CLIENT_IO_TX_POWER_ID + " }}";
-                    error = error || (cJSON_AddStringToObject(cmp, "value_template", value_template.c_str()) == NULL); // value_template
-                    std::string command_topic = mTopicPrefix + "/" + MQTT_CLIENT_CONFIG_IO_ID + MQTT_CLIENT_COMMAND_TOPIC;
-                    error = error || (cJSON_AddStringToObject(cmp, "command_topic", command_topic.c_str()) == NULL); // command_topic
-                    std::string command_template = "{\"" + MQTT_CLIENT_IO_TX_POWER_ID + "\": {{ value }} }";
-                    error = error || (cJSON_AddStringToObject(cmp, "command_template", command_template.c_str()) == NULL); // command_template
-                }
-                if (!mIsIoHomePassive) // don't send IO devices if in passive mode
-                {
-                    // Add 'Discover' button
-                    cmp = cJSON_AddObjectToObject(cmps, "discover");
-                    if (cmp == NULL)
-                        error = true;
-                    else
-                    {
-                        error = error || (cJSON_AddStringToObject(cmp, "p", "button") == NULL);                                // platform
-                        error = error || (cJSON_AddStringToObject(cmp, "unique_id", MQTT_CLIENT_DISCOVER_ID.c_str()) == NULL); // unique_id
-                        error = error || (cJSON_AddStringToObject(cmp, "name", "Discover IO device") == NULL);                 // name
-                        std::string discover_topic = mTopicPrefix + "/" + MQTT_CLIENT_DISCOVER_ID + MQTT_CLIENT_COMMAND_TOPIC;
-                        error = error || (cJSON_AddStringToObject(cmp, "command_topic", discover_topic.c_str()) == NULL); // command_topic
-                    }
-                    // Add "AddIoDevice" text https://www.home-assistant.io/integrations/text.mqtt/
-                    cmp = cJSON_AddObjectToObject(cmps, MQTT_CLIENT_ADD_DEVICE_ID.c_str());
-                    if (cmp == NULL)
-                        error = true;
-                    else
-                    {
-                        error = error || (cJSON_AddStringToObject(cmp, "p", "text") == NULL);                                    // platform
-                        error = error || (cJSON_AddStringToObject(cmp, "unique_id", MQTT_CLIENT_ADD_DEVICE_ID.c_str()) == NULL); // unique_id
-                        error = error || (cJSON_AddStringToObject(cmp, "name", "Add IO device") == NULL);                        // name
-                        std::string command_topic = mTopicPrefix + "/" + MQTT_CLIENT_MANAGE_IO_ID + MQTT_CLIENT_COMMAND_TOPIC;
-                        error = error || (cJSON_AddStringToObject(cmp, "command_topic", command_topic.c_str()) == NULL); // command_topic
-                        std::string command_template = "{\"" + MQTT_CLIENT_ADD_DEVICE_ID + "\": \"{{ value }}\"}";
-                        error = error || (cJSON_AddStringToObject(cmp, "command_template", command_template.c_str()) == NULL); // command_template
-                    }
-                    // Add "RemoveIoDevice" text https://www.home-assistant.io/integrations/text.mqtt/
-                    cmp = cJSON_AddObjectToObject(cmps, MQTT_CLIENT_REM_DEVICE_ID.c_str());
-                    if (cmp == NULL)
-                        error = true;
-                    else
-                    {
-                        error = error || (cJSON_AddStringToObject(cmp, "p", "text") == NULL);                                    // platform
-                        error = error || (cJSON_AddStringToObject(cmp, "unique_id", MQTT_CLIENT_REM_DEVICE_ID.c_str()) == NULL); // unique_id
-                        error = error || (cJSON_AddStringToObject(cmp, "name", "Remove IO device") == NULL);                     // name
-                        std::string command_topic = mTopicPrefix + "/" + MQTT_CLIENT_MANAGE_IO_ID + MQTT_CLIENT_COMMAND_TOPIC;
-                        error = error || (cJSON_AddStringToObject(cmp, "command_topic", command_topic.c_str()) == NULL); // command_topic
-                        std::string command_template = "{\"" + MQTT_CLIENT_REM_DEVICE_ID + "\": \"{{ value }}\"}";
-                        error = error || (cJSON_AddStringToObject(cmp, "command_template", command_template.c_str()) == NULL); // command_template
-                    }
-                    // Add "InvertIoDevice" text https://www.home-assistant.io/integrations/text.mqtt/
-                    cmp = cJSON_AddObjectToObject(cmps, MQTT_CLIENT_INV_DEVICE_ID.c_str());
-                    if (cmp == NULL)
-                        error = true;
-                    else
-                    {
-                        error = error || (cJSON_AddStringToObject(cmp, "p", "text") == NULL);                                    // platform
-                        error = error || (cJSON_AddStringToObject(cmp, "unique_id", MQTT_CLIENT_INV_DEVICE_ID.c_str()) == NULL); // unique_id
-                        error = error || (cJSON_AddStringToObject(cmp, "name", "Invert IO device") == NULL);                     // name
-                        std::string command_topic = mTopicPrefix + "/" + MQTT_CLIENT_MANAGE_IO_ID + MQTT_CLIENT_COMMAND_TOPIC;
-                        error = error || (cJSON_AddStringToObject(cmp, "command_topic", command_topic.c_str()) == NULL); // command_topic
-                        std::string command_template = "{\"" + MQTT_CLIENT_INV_DEVICE_ID + "\": \"{{ value }}\"}";
-                        error = error || (cJSON_AddStringToObject(cmp, "command_template", command_template.c_str()) == NULL); // command_template
-                    }
-                    // Add "LinkIoRemote" text https://www.home-assistant.io/integrations/text.mqtt/
-                    cmp = cJSON_AddObjectToObject(cmps, MQTT_CLIENT_LINK_REMOTE_ID.c_str());
-                    if (cmp == NULL)
-                        error = true;
-                    else
-                    {
-                        error = error || (cJSON_AddStringToObject(cmp, "p", "text") == NULL);                                     // platform
-                        error = error || (cJSON_AddStringToObject(cmp, "unique_id", MQTT_CLIENT_LINK_REMOTE_ID.c_str()) == NULL); // unique_id
-                        error = error || (cJSON_AddStringToObject(cmp, "name", "Link IO device to remote") == NULL);              // name
-                        std::string command_topic = mTopicPrefix + "/" + MQTT_CLIENT_MANAGE_IO_ID + MQTT_CLIENT_COMMAND_TOPIC;
-                        error = error || (cJSON_AddStringToObject(cmp, "command_topic", command_topic.c_str()) == NULL); // command_topic
-                        std::string command_template = "{\"" + MQTT_CLIENT_LINK_REMOTE_ID + "\": \"{{ value }}\"}";
-                        error = error || (cJSON_AddStringToObject(cmp, "command_template", command_template.c_str()) == NULL); // command_template
-                    }
-                    // Add "RemoveIoRemote" text https://www.home-assistant.io/integrations/text.mqtt/
-                    cmp = cJSON_AddObjectToObject(cmps, MQTT_CLIENT_REM_REMOTE_ID.c_str());
-                    if (cmp == NULL)
-                        error = true;
-                    else
-                    {
-                        error = error || (cJSON_AddStringToObject(cmp, "p", "text") == NULL);                                    // platform
-                        error = error || (cJSON_AddStringToObject(cmp, "unique_id", MQTT_CLIENT_REM_REMOTE_ID.c_str()) == NULL); // unique_id
-                        error = error || (cJSON_AddStringToObject(cmp, "name", "Remove IO remote") == NULL);                     // name
-                        std::string command_topic = mTopicPrefix + "/" + MQTT_CLIENT_MANAGE_IO_ID + MQTT_CLIENT_COMMAND_TOPIC;
-                        error = error || (cJSON_AddStringToObject(cmp, "command_topic", command_topic.c_str()) == NULL); // command_topic
-                        std::string command_template = "{\"" + MQTT_CLIENT_REM_REMOTE_ID + "\": \"{{ value }}\"}";
-                        error = error || (cJSON_AddStringToObject(cmp, "command_template", command_template.c_str()) == NULL); // command_template
-                    }
-                    // Add "SetIoDeviceName" text https://www.home-assistant.io/integrations/text.mqtt/
-                    cmp = cJSON_AddObjectToObject(cmps, MQTT_CLIENT_SET_DEVICE_NAME_ID.c_str());
-                    if (cmp == NULL)
-                        error = true;
-                    else
-                    {
-                        error = error || (cJSON_AddStringToObject(cmp, "p", "text") == NULL);                                         // platform
-                        error = error || (cJSON_AddStringToObject(cmp, "unique_id", MQTT_CLIENT_SET_DEVICE_NAME_ID.c_str()) == NULL); // unique_id
-                        error = error || (cJSON_AddStringToObject(cmp, "name", "Change IO device name") == NULL);                     // name
-                        std::string command_topic = mTopicPrefix + "/" + MQTT_CLIENT_MANAGE_IO_ID + MQTT_CLIENT_COMMAND_TOPIC;
-                        error = error || (cJSON_AddStringToObject(cmp, "command_topic", command_topic.c_str()) == NULL); // command_topic
-                        std::string command_template = "{\"" + MQTT_CLIENT_SET_DEVICE_NAME_ID + "\": \"{{ value }}\"}";
-                        error = error || (cJSON_AddStringToObject(cmp, "command_template", command_template.c_str()) == NULL); // command_template
-                    }
-                    // Add IO devices
-                    std::lock_guard<std::mutex> guard(mIoRtsManager->mIoDevicesMutex); // Take mutex! It will be released when quitting the scope (after for loop)
-                    for (auto it = mIoRtsManager->mIoDevices.begin(); it != mIoRtsManager->mIoDevices.end(); ++it)
-                    {
-                        // Add this device to JSON
-                        std::string device_id = MQTT_CLIENT_PREFIX_IO + it->first;
-                        std::string device_id_fav = MQTT_CLIENT_PREFIX_IO + it->first + MQTT_CLIENT_SUFFIX_FAV_IO;
-                        std::string device_cmd_topic = GetTopicPrefix() + "/" + device_id + MQTT_CLIENT_COMMAND_TOPIC;
-                        std::string device_state_topic = GetTopicPrefix() + "/" + device_id + MQTT_CLIENT_STATE_TOPIC;
-                        std::string device_position_topic = GetTopicPrefix() + "/" + device_id + MQTT_CLIENT_POSITION_TOPIC;
-                        std::string device_cmd_position_topic = GetTopicPrefix() + "/" + device_id + MQTT_CLIENT_COMMAND_POSITION_TOPIC;
-                        std::string device_tilt_topic = GetTopicPrefix() + "/" + device_id + MQTT_CLIENT_TILT_TOPIC;
-                        std::string device_cmd_tilt_topic = GetTopicPrefix() + "/" + device_id + MQTT_CLIENT_COMMAND_TILT_TOPIC;
-                        std::string device_cmd_fav_pos_topic = GetTopicPrefix() + "/" + device_id + MQTT_CLIENT_COMMAND_FAV_POS_TOPIC;
-                        std::string device_plateform;
-                        cmp = cJSON_AddObjectToObject(cmps, device_id.c_str());
-                        if (cmp == NULL)
-                            error = true;
-                        else
-                        {
-                            switch (it->second.info.device_type)
-                            {
-                            case DeviceType::VENETIAN_BLIND:
-                            case DeviceType::ROLLER_SHUTTER:
-                            case DeviceType::AWNING:
-                            case DeviceType::WINDOW_OPENER:
-                            case DeviceType::GARAGE_OPENER:
-                            case DeviceType::GATE_OPENER:
-                            case DeviceType::ROLLING_DOOR_OPENER:
-                            case DeviceType::BLIND:
-                            case DeviceType::DUAL_SHUTTER:
-                            case DeviceType::HORIZONTAL_AWNING:
-                            case DeviceType::EXTERNAL_VENETIAN_BLIND:
-                            case DeviceType::LOUVRE_BLIND:
-                            case DeviceType::CURTAIN_TRACK:
-                            case DeviceType::SWINGING_SHUTTER:
-                            {
-                                // https://www.home-assistant.io/integrations/cover.mqtt/
-                                device_plateform = "cover";
-                                if (!it->second.is_deleted)
-                                {
-                                    // add attributes only if not deleted
-                                    if (it->second.info.is_openclose_inverted)
-                                    {
-                                        error = error || (cJSON_AddNumberToObject(cmp, "position_closed", 0) == NULL); // position_closed
-                                        error = error || (cJSON_AddNumberToObject(cmp, "position_open", 100) == NULL); // position_open
-                                    }
-                                    else
-                                    {
-                                        error = error || (cJSON_AddNumberToObject(cmp, "position_closed", 100) == NULL); // position_closed
-                                        error = error || (cJSON_AddNumberToObject(cmp, "position_open", 0) == NULL);     // position_open
-                                    }
-                                    error = error || (cJSON_AddStringToObject(cmp, "position_topic", device_position_topic.c_str()) == NULL);         // position_topic
-                                    error = error || (cJSON_AddStringToObject(cmp, "set_position_topic", device_cmd_position_topic.c_str()) == NULL); // set_position_topic
-                                    // add tilt topics if device supports tilt
-                                    if (iohome::deviceTypeSupportsTilt(it->second.info.device_type))
-                                    {
-                                        error = error || (cJSON_AddStringToObject(cmp, "tilt_status_topic", device_tilt_topic.c_str()) == NULL);       // tilt_status_topic
-                                        error = error || (cJSON_AddStringToObject(cmp, "tilt_command_topic", device_cmd_tilt_topic.c_str()) == NULL);  // tilt_command_topic
-                                        error = error || (cJSON_AddNumberToObject(cmp, "tilt_closed_value", 0) == NULL);                              // tilt_closed_value
-                                        error = error || (cJSON_AddNumberToObject(cmp, "tilt_opened_value", 100) == NULL);                            // tilt_opened_value
-                                        error = error || (cJSON_AddNumberToObject(cmp, "tilt_min", 0) == NULL);                                      // tilt_min
-                                        error = error || (cJSON_AddNumberToObject(cmp, "tilt_max", 100) == NULL);                                    // tilt_max
-                                    }
-                                    // add device_class https://www.home-assistant.io/integrations/cover/#device_class
-                                    std::string type = "shutter";
-                                    switch (it->second.info.device_type)
-                                    {
-                                    case DeviceType::VENETIAN_BLIND:
-                                    case DeviceType::BLIND:
-                                    case DeviceType::EXTERNAL_VENETIAN_BLIND:
-                                    case DeviceType::LOUVRE_BLIND:
-                                        type = "blind";
-                                        break;
-                                    case DeviceType::ROLLER_SHUTTER:
-                                    case DeviceType::DUAL_SHUTTER:
-                                    case DeviceType::SWINGING_SHUTTER:
-                                        type = "shutter";
-                                        break;
-                                    case DeviceType::AWNING:
-                                    case DeviceType::HORIZONTAL_AWNING:
-                                        type = "awning";
-                                        break;
-                                    case DeviceType::WINDOW_OPENER:
-                                        type = "window";
-                                        break;
-                                    case DeviceType::GARAGE_OPENER:
-                                        type = "garage";
-                                        break;
-                                    case DeviceType::GATE_OPENER:
-                                        type = "gate";
-                                        break;
-                                    case DeviceType::ROLLING_DOOR_OPENER:
-                                        type = "door";
-                                        break;
-                                    case DeviceType::CURTAIN_TRACK:
-                                        type = "curtain";
-                                        break;
-                                    default:
-                                        type = "None";
-                                        break;
-                                    }
-                                    error = error || (cJSON_AddStringToObject(cmp, "device_class", type.c_str()) == NULL); // device_class
-                                    if (!error)
-                                    {
-                                        // add "favorite position" button
-                                        cJSON *fav = cJSON_AddObjectToObject(cmps, device_id_fav.c_str());
-                                        if (fav == NULL)
-                                            error = true;
-                                        else
-                                        {
-                                            error = error || (cJSON_AddStringToObject(fav, "p", "button") == NULL);                      // platform
-                                            error = error || (cJSON_AddStringToObject(fav, "unique_id", device_id_fav.c_str()) == NULL); // unique_id
-                                            std::string favName = it->second.info.name + std::string(" Favorite position");
-                                            error = error || (cJSON_AddStringToObject(fav, "name", favName.c_str()) == NULL);                           // name
-                                            error = error || (cJSON_AddStringToObject(fav, "command_topic", device_cmd_fav_pos_topic.c_str()) == NULL); // command_topic
-                                        }
-                                    }
-                                }
-                                else
-                                {
-                                    if (!error)
-                                    {
-                                        // remove "favorite position" button
-                                        cJSON *fav = cJSON_AddObjectToObject(cmps, device_id_fav.c_str());
-                                        if (fav == NULL)
-                                            error = true;
-                                        else
-                                        {
-                                            error = error || (cJSON_AddStringToObject(fav, "p", "button") == NULL); // platform
-                                        }
-                                    }
-                                }
-                                break;
-                            }
-                            case DeviceType::LIGHT:
-                                // https://www.home-assistant.io/integrations/light.mqtt/
-                                device_plateform = "light";
-                                if (!it->second.is_deleted)
-                                {
-                                    error = error || (cJSON_AddStringToObject(cmp, "optimistic", "true") == NULL); // optimistic
-                                    // TODO: manage brightness, waiting for feedback
-                                }
-                                break;
-                            case DeviceType::ON_OFF_SWITCH:
-                                // https://www.home-assistant.io/integrations/switch.mqtt/
-                                device_plateform = "switch";
-                                if (!it->second.is_deleted)
-                                {
-                                    error = error || (cJSON_AddStringToObject(cmp, "optimistic", "true") == NULL); // optimistic
-                                }
-                                break;
-                            case DeviceType::LOCK:
-                                // https://www.home-assistant.io/integrations/lock.mqtt/
-                                device_plateform = "lock";
-                                break;
-                            // other device types we don't support yet so don't send MQTT discovery for now
-                            case DeviceType::UNKNOWN:
-                            case DeviceType::UNKNOWN_0B:
-                            case DeviceType::BEACON:
-                            case DeviceType::HEATING_TEMPERATURE_INTERFACE: // https://www.home-assistant.io/integrations/climate.mqtt/ ?
-                            case DeviceType::VENTILATION_POINT:             // https://www.home-assistant.io/integrations/fan.mqtt/ ?
-                            case DeviceType::EXTERIOR_HEATING:              // https://www.home-assistant.io/integrations/climate.mqtt/?
-                            case DeviceType::HEAT_PUMP:                     // https://www.home-assistant.io/integrations/climate.mqtt/ ?
-                            case DeviceType::INTRUSION_ALARM:               // https://www.home-assistant.io/integrations/alarm_control_panel.mqtt/ ?
-                            default:
-                                error = true;
-                                cJSON_DeleteItemFromObject(cmps, device_id.c_str());
-                                ESP_LOGE(TAG, "Failed to add device to MQTT discovery: type not managed! (%d)", it->second.info.device_type);
-                                break;
-                            }
-                            // add 'platform' even if device is deleted to inform Home Assistant that this component is deleted
-                            error = error || (cJSON_AddStringToObject(cmp, "p", device_plateform.c_str()) == NULL); // platform
-                            if (!it->second.is_deleted)
-                            {
-                                // add attributes only if not deleted
-                                error = error || (cJSON_AddStringToObject(cmp, "unique_id", device_id.c_str()) == NULL);            // unique_id
-                                error = error || (cJSON_AddStringToObject(cmp, "name", it->second.info.name) == NULL);              // name
-                                error = error || (cJSON_AddStringToObject(cmp, "command_topic", device_cmd_topic.c_str()) == NULL); // command_topic
-                                error = error || (cJSON_AddStringToObject(cmp, "state_topic", device_state_topic.c_str()) == NULL); // state_topic
-                            }
-                        }
-                    }
-                    // Mutex automatically released!
-                }
+                error = error || (cJSON_AddStringToObject(cmp, "p", "button") == NULL);                              // platform
+                error = error || (cJSON_AddStringToObject(cmp, "unique_id", MQTT_CLIENT_REBOOT_ID.c_str()) == NULL); // unique_id
+                error = error || (cJSON_AddStringToObject(cmp, "name", "Reboot") == NULL);                           // name
+                std::string reboot_topic = mTopicPrefix + "/" + MQTT_CLIENT_REBOOT_ID + MQTT_CLIENT_COMMAND_TOPIC;
+                error = error || (cJSON_AddStringToObject(cmp, "command_topic", reboot_topic.c_str()) == NULL); // command_topic
             }
         }
-        // Add shared options: availability, command_topic, state_topic, ...
-        std::string availability_topic = mTopicPrefix + MQTT_CLIENT_BIRTH_WILL_TOPIC;
+        if (!error)
+        {
+            // Add "IoLogging" switch https://www.home-assistant.io/integrations/switch.mqtt/
+            cJSON *cmp = cJSON_AddObjectToObject(cmps, MQTT_CLIENT_IO_LOGGING_ID.c_str());
+            if (cmp == NULL)
+                error = true;
+            else
+            {
+                error = error || (cJSON_AddStringToObject(cmp, "p", "switch") == NULL);                                  // platform
+                error = error || (cJSON_AddStringToObject(cmp, "unique_id", MQTT_CLIENT_IO_LOGGING_ID.c_str()) == NULL); // unique_id
+                error = error || (cJSON_AddStringToObject(cmp, "name", "Enable IO logging") == NULL);                    // name
+                error = error || (cJSON_AddBoolToObject(cmp, "optimistic", true) == NULL);                               // optimistic
+                std::string state_topic = mTopicPrefix + "/" + MQTT_CLIENT_CONFIG_IO_ID + MQTT_CLIENT_STATE_TOPIC;
+                error = error || (cJSON_AddStringToObject(cmp, "state_topic", state_topic.c_str()) == NULL); // state_topic
+                std::string value_template = "{{ value_json." + MQTT_CLIENT_IO_LOGGING_ID + " }}";
+                error = error || (cJSON_AddStringToObject(cmp, "value_template", value_template.c_str()) == NULL); // value_template
+                std::string command_topic = mTopicPrefix + "/" + MQTT_CLIENT_CONFIG_IO_ID + MQTT_CLIENT_COMMAND_TOPIC;
+                error = error || (cJSON_AddStringToObject(cmp, "command_topic", command_topic.c_str()) == NULL); // command_topic
+                std::string command_template = "{\"" + MQTT_CLIENT_IO_LOGGING_ID + "\": \"{{ value }}\"}";
+                error = error || (cJSON_AddStringToObject(cmp, "command_template", command_template.c_str()) == NULL); // command_template
+            }
+        }
+        if (!error)
+        {
+            // Add "IoPassive" switch https://www.home-assistant.io/integrations/switch.mqtt/
+            cJSON *cmp = cJSON_AddObjectToObject(cmps, MQTT_CLIENT_IO_PASSIVE_ID.c_str());
+            if (cmp == NULL)
+                error = true;
+            else
+            {
+                error = error || (cJSON_AddStringToObject(cmp, "p", "switch") == NULL);                                  // platform
+                error = error || (cJSON_AddStringToObject(cmp, "unique_id", MQTT_CLIENT_IO_PASSIVE_ID.c_str()) == NULL); // unique_id
+                error = error || (cJSON_AddStringToObject(cmp, "name", "Enable IO Passive mode") == NULL);               // name
+                error = error || (cJSON_AddBoolToObject(cmp, "optimistic", true) == NULL);                               // optimistic
+                std::string state_topic = mTopicPrefix + "/" + MQTT_CLIENT_CONFIG_IO_ID + MQTT_CLIENT_STATE_TOPIC;
+                error = error || (cJSON_AddStringToObject(cmp, "state_topic", state_topic.c_str()) == NULL); // state_topic
+                std::string value_template = "{{ value_json." + MQTT_CLIENT_IO_PASSIVE_ID + " }}";
+                error = error || (cJSON_AddStringToObject(cmp, "value_template", value_template.c_str()) == NULL); // value_template
+                std::string command_topic = mTopicPrefix + "/" + MQTT_CLIENT_CONFIG_IO_ID + MQTT_CLIENT_COMMAND_TOPIC;
+                error = error || (cJSON_AddStringToObject(cmp, "command_topic", command_topic.c_str()) == NULL); // command_topic
+                std::string command_template = "{\"" + MQTT_CLIENT_IO_PASSIVE_ID + "\": \"{{ value }}\"}";
+                error = error || (cJSON_AddStringToObject(cmp, "command_template", command_template.c_str()) == NULL); // command_template
+            }
+        }
+        if (!error)
+        {
+            // Add "IoTxPower" number https://www.home-assistant.io/integrations/number.mqtt/
+            cJSON *cmp = cJSON_AddObjectToObject(cmps, MQTT_CLIENT_IO_TX_POWER_ID.c_str());
+            if (cmp == NULL)
+                error = true;
+            else
+            {
+                error = error || (cJSON_AddStringToObject(cmp, "p", "number") == NULL);                                   // platform
+                error = error || (cJSON_AddStringToObject(cmp, "unique_id", MQTT_CLIENT_IO_TX_POWER_ID.c_str()) == NULL); // unique_id
+                error = error || (cJSON_AddStringToObject(cmp, "name", "IO Tx Power") == NULL);                           // name
+                error = error || (cJSON_AddBoolToObject(cmp, "optimistic", true) == NULL);                                // optimistic
+                error = error || (cJSON_AddNumberToObject(cmp, "min", 0) == NULL);                                        // min
+                error = error || (cJSON_AddNumberToObject(cmp, "max", 20) == NULL);                                       // max
+                std::string state_topic = mTopicPrefix + "/" + MQTT_CLIENT_CONFIG_IO_ID + MQTT_CLIENT_STATE_TOPIC;
+                error = error || (cJSON_AddStringToObject(cmp, "state_topic", state_topic.c_str()) == NULL); // state_topic
+                std::string value_template = "{{ value_json." + MQTT_CLIENT_IO_TX_POWER_ID + " }}";
+                error = error || (cJSON_AddStringToObject(cmp, "value_template", value_template.c_str()) == NULL); // value_template
+                std::string command_topic = mTopicPrefix + "/" + MQTT_CLIENT_CONFIG_IO_ID + MQTT_CLIENT_COMMAND_TOPIC;
+                error = error || (cJSON_AddStringToObject(cmp, "command_topic", command_topic.c_str()) == NULL); // command_topic
+                std::string command_template = "{\"" + MQTT_CLIENT_IO_TX_POWER_ID + "\": {{ value }} }";
+                error = error || (cJSON_AddStringToObject(cmp, "command_template", command_template.c_str()) == NULL); // command_template
+            }
+        }
+        if (!error && !mIsIoHomePassive)
+        {
+            // Add 'Discover' button
+            cJSON *cmp = cJSON_AddObjectToObject(cmps, "discover");
+            if (cmp == NULL)
+                error = true;
+            else
+            {
+                error = error || (cJSON_AddStringToObject(cmp, "p", "button") == NULL);                                // platform
+                error = error || (cJSON_AddStringToObject(cmp, "unique_id", MQTT_CLIENT_DISCOVER_ID.c_str()) == NULL); // unique_id
+                error = error || (cJSON_AddStringToObject(cmp, "name", "Discover IO device") == NULL);                 // name
+                std::string discover_topic = mTopicPrefix + "/" + MQTT_CLIENT_DISCOVER_ID + MQTT_CLIENT_COMMAND_TOPIC;
+                error = error || (cJSON_AddStringToObject(cmp, "command_topic", discover_topic.c_str()) == NULL); // command_topic
+            }
+            // Add "AddIoDevice" text https://www.home-assistant.io/integrations/text.mqtt/
+            cmp = cJSON_AddObjectToObject(cmps, MQTT_CLIENT_ADD_DEVICE_ID.c_str());
+            if (cmp == NULL)
+                error = true;
+            else
+            {
+                error = error || (cJSON_AddStringToObject(cmp, "p", "text") == NULL);                                    // platform
+                error = error || (cJSON_AddStringToObject(cmp, "unique_id", MQTT_CLIENT_ADD_DEVICE_ID.c_str()) == NULL); // unique_id
+                error = error || (cJSON_AddStringToObject(cmp, "name", "Add IO device") == NULL);                        // name
+                std::string command_topic = mTopicPrefix + "/" + MQTT_CLIENT_MANAGE_IO_ID + MQTT_CLIENT_COMMAND_TOPIC;
+                error = error || (cJSON_AddStringToObject(cmp, "command_topic", command_topic.c_str()) == NULL); // command_topic
+                std::string command_template = "{\"" + MQTT_CLIENT_ADD_DEVICE_ID + "\": \"{{ value }}\"}";
+                error = error || (cJSON_AddStringToObject(cmp, "command_template", command_template.c_str()) == NULL); // command_template
+            }
+            // Add "RemoveIoDevice" text https://www.home-assistant.io/integrations/text.mqtt/
+            cmp = cJSON_AddObjectToObject(cmps, MQTT_CLIENT_REM_DEVICE_ID.c_str());
+            if (cmp == NULL)
+                error = true;
+            else
+            {
+                error = error || (cJSON_AddStringToObject(cmp, "p", "text") == NULL);                                    // platform
+                error = error || (cJSON_AddStringToObject(cmp, "unique_id", MQTT_CLIENT_REM_DEVICE_ID.c_str()) == NULL); // unique_id
+                error = error || (cJSON_AddStringToObject(cmp, "name", "Remove IO device") == NULL);                     // name
+                std::string command_topic = mTopicPrefix + "/" + MQTT_CLIENT_MANAGE_IO_ID + MQTT_CLIENT_COMMAND_TOPIC;
+                error = error || (cJSON_AddStringToObject(cmp, "command_topic", command_topic.c_str()) == NULL); // command_topic
+                std::string command_template = "{\"" + MQTT_CLIENT_REM_DEVICE_ID + "\": \"{{ value }}\"}";
+                error = error || (cJSON_AddStringToObject(cmp, "command_template", command_template.c_str()) == NULL); // command_template
+            }
+            // Add "InvertIoDevice" text https://www.home-assistant.io/integrations/text.mqtt/
+            cmp = cJSON_AddObjectToObject(cmps, MQTT_CLIENT_INV_DEVICE_ID.c_str());
+            if (cmp == NULL)
+                error = true;
+            else
+            {
+                error = error || (cJSON_AddStringToObject(cmp, "p", "text") == NULL);                                    // platform
+                error = error || (cJSON_AddStringToObject(cmp, "unique_id", MQTT_CLIENT_INV_DEVICE_ID.c_str()) == NULL); // unique_id
+                error = error || (cJSON_AddStringToObject(cmp, "name", "Invert IO device") == NULL);                     // name
+                std::string command_topic = mTopicPrefix + "/" + MQTT_CLIENT_MANAGE_IO_ID + MQTT_CLIENT_COMMAND_TOPIC;
+                error = error || (cJSON_AddStringToObject(cmp, "command_topic", command_topic.c_str()) == NULL); // command_topic
+                std::string command_template = "{\"" + MQTT_CLIENT_INV_DEVICE_ID + "\": \"{{ value }}\"}";
+                error = error || (cJSON_AddStringToObject(cmp, "command_template", command_template.c_str()) == NULL); // command_template
+            }
+            // Add "LinkIoRemote" text https://www.home-assistant.io/integrations/text.mqtt/
+            cmp = cJSON_AddObjectToObject(cmps, MQTT_CLIENT_LINK_REMOTE_ID.c_str());
+            if (cmp == NULL)
+                error = true;
+            else
+            {
+                error = error || (cJSON_AddStringToObject(cmp, "p", "text") == NULL);                                     // platform
+                error = error || (cJSON_AddStringToObject(cmp, "unique_id", MQTT_CLIENT_LINK_REMOTE_ID.c_str()) == NULL); // unique_id
+                error = error || (cJSON_AddStringToObject(cmp, "name", "Link IO device to remote") == NULL);              // name
+                std::string command_topic = mTopicPrefix + "/" + MQTT_CLIENT_MANAGE_IO_ID + MQTT_CLIENT_COMMAND_TOPIC;
+                error = error || (cJSON_AddStringToObject(cmp, "command_topic", command_topic.c_str()) == NULL); // command_topic
+                std::string command_template = "{\"" + MQTT_CLIENT_LINK_REMOTE_ID + "\": \"{{ value }}\"}";
+                error = error || (cJSON_AddStringToObject(cmp, "command_template", command_template.c_str()) == NULL); // command_template
+            }
+            // Add "RemoveIoRemote" text https://www.home-assistant.io/integrations/text.mqtt/
+            cmp = cJSON_AddObjectToObject(cmps, MQTT_CLIENT_REM_REMOTE_ID.c_str());
+            if (cmp == NULL)
+                error = true;
+            else
+            {
+                error = error || (cJSON_AddStringToObject(cmp, "p", "text") == NULL);                                    // platform
+                error = error || (cJSON_AddStringToObject(cmp, "unique_id", MQTT_CLIENT_REM_REMOTE_ID.c_str()) == NULL); // unique_id
+                error = error || (cJSON_AddStringToObject(cmp, "name", "Remove IO remote") == NULL);                     // name
+                std::string command_topic = mTopicPrefix + "/" + MQTT_CLIENT_MANAGE_IO_ID + MQTT_CLIENT_COMMAND_TOPIC;
+                error = error || (cJSON_AddStringToObject(cmp, "command_topic", command_topic.c_str()) == NULL); // command_topic
+                std::string command_template = "{\"" + MQTT_CLIENT_REM_REMOTE_ID + "\": \"{{ value }}\"}";
+                error = error || (cJSON_AddStringToObject(cmp, "command_template", command_template.c_str()) == NULL); // command_template
+            }
+            // Add "SetIoDeviceName" text https://www.home-assistant.io/integrations/text.mqtt/
+            cmp = cJSON_AddObjectToObject(cmps, MQTT_CLIENT_SET_DEVICE_NAME_ID.c_str());
+            if (cmp == NULL)
+                error = true;
+            else
+            {
+                error = error || (cJSON_AddStringToObject(cmp, "p", "text") == NULL);                                         // platform
+                error = error || (cJSON_AddStringToObject(cmp, "unique_id", MQTT_CLIENT_SET_DEVICE_NAME_ID.c_str()) == NULL); // unique_id
+                error = error || (cJSON_AddStringToObject(cmp, "name", "Change IO device name") == NULL);                     // name
+                std::string command_topic = mTopicPrefix + "/" + MQTT_CLIENT_MANAGE_IO_ID + MQTT_CLIENT_COMMAND_TOPIC;
+                error = error || (cJSON_AddStringToObject(cmp, "command_topic", command_topic.c_str()) == NULL); // command_topic
+                std::string command_template = "{\"" + MQTT_CLIENT_SET_DEVICE_NAME_ID + "\": \"{{ value }}\"}";
+                error = error || (cJSON_AddStringToObject(cmp, "command_template", command_template.c_str()) == NULL); // command_template
+            }
+        }
+
+        // Shared availability
         error = error || (cJSON_AddStringToObject(discovery, "availability_topic", availability_topic.c_str()) == NULL);
-        // Send discovery to MQTT topic
+
+        // Publish controller discovery
         if (!error)
         {
             std::string topic = mDiscoveryPrefix + MQTT_CLIENT_DISCOVERY_TOPIC;
             const char *data = cJSON_Print(discovery);
             if (data == NULL)
             {
-                ESP_LOGE(TAG, "Failed to create discovery string");
+                ESP_LOGE(TAG, "Failed to create controller discovery string");
             }
             else
             {
                 esp_mqtt_client_publish(mMqttClientHandle, topic.c_str(), data, 0, 0, 1);
                 cJSON_free((void *)data);
-                ESP_LOGI(TAG, "Sent discovery successfully");
+                ESP_LOGI(TAG, "Sent controller discovery successfully");
             }
         }
         cJSON_Delete(discovery);
+    }
+    void MqttHelpers::SendIoDevicesDiscovery()
+    {
+        std::string clientId = MqttConfig::GetClientId();
+        std::string availability_topic = mTopicPrefix + MQTT_CLIENT_BIRTH_WILL_TOPIC;
+        const esp_app_desc_t *desc = esp_app_get_description();
+
+        // Compute the discovery base path (e.g. "homeassistant/device") from mDiscoveryPrefix
+        // mDiscoveryPrefix is like "homeassistant/device/io-rts", we need "homeassistant/device"
+        std::string discoveryBase = mDiscoveryPrefix;
+        size_t lastSlash = discoveryBase.rfind('/');
+        if (lastSlash != std::string::npos)
+            discoveryBase = discoveryBase.substr(0, lastSlash);
+
+        std::lock_guard<std::mutex> guard(mIoRtsManager->mIoDevicesMutex);
+        for (auto it = mIoRtsManager->mIoDevices.begin(); it != mIoRtsManager->mIoDevices.end(); ++it)
+        {
+            std::string device_id = MQTT_CLIENT_PREFIX_IO + it->first;
+
+            // For deleted devices, send empty payload to remove the device discovery
+            if (it->second.is_deleted)
+            {
+                std::string topic = discoveryBase + "/" + device_id + MQTT_CLIENT_DISCOVERY_TOPIC;
+                esp_mqtt_client_publish(mMqttClientHandle, topic.c_str(), NULL, 0, 0, 1);
+                continue;
+            }
+
+            bool error = false;
+            cJSON *discovery = cJSON_CreateObject();
+            if (discovery == NULL)
+                continue;
+
+            // "dev" section — this IO device, linked to controller via via_device
+            cJSON *dev = cJSON_AddObjectToObject(discovery, "dev");
+            if (dev == NULL)
+                error = true;
+            else
+            {
+                error = error || (cJSON_AddStringToObject(dev, "ids", device_id.c_str()) == NULL);       // identifiers
+                error = error || (cJSON_AddStringToObject(dev, "name", it->second.info.name) == NULL);   // name
+                error = error || (cJSON_AddStringToObject(dev, "mf", "Somfy") == NULL);                  // manufacturer
+                error = error || (cJSON_AddStringToObject(dev, "sn", it->first.c_str()) == NULL);        // serial_number (node address)
+                error = error || (cJSON_AddStringToObject(dev, "via_device", clientId.c_str()) == NULL); // via_device — links to controller
+            }
+
+            // "o" (origin) section
+            if (!error)
+            {
+                cJSON *o = cJSON_AddObjectToObject(discovery, "o");
+                if (o == NULL)
+                    error = true;
+                else
+                {
+                    error = error || (cJSON_AddStringToObject(o, "name", clientId.c_str()) == NULL);                             // name
+                    error = error || (cJSON_AddStringToObject(o, "url", "https://github.com/nicolas5000/io-rts-esp32") == NULL); // support_url
+                    error = error || (cJSON_AddStringToObject(o, "sw", desc->version) == NULL);                                  // sw_version
+                }
+            }
+
+            // "cmps" section — device components
+            cJSON *cmps = NULL;
+            if (!error)
+            {
+                cmps = cJSON_AddObjectToObject(discovery, "cmps");
+                if (cmps == NULL)
+                    error = true;
+            }
+
+            if (!error)
+            {
+                std::string device_id_fav = MQTT_CLIENT_PREFIX_IO + it->first + MQTT_CLIENT_SUFFIX_FAV_IO;
+                std::string device_cmd_topic = GetTopicPrefix() + "/" + device_id + MQTT_CLIENT_COMMAND_TOPIC;
+                std::string device_state_topic = GetTopicPrefix() + "/" + device_id + MQTT_CLIENT_STATE_TOPIC;
+                std::string device_position_topic = GetTopicPrefix() + "/" + device_id + MQTT_CLIENT_POSITION_TOPIC;
+                std::string device_cmd_position_topic = GetTopicPrefix() + "/" + device_id + MQTT_CLIENT_COMMAND_POSITION_TOPIC;
+                std::string device_tilt_topic = GetTopicPrefix() + "/" + device_id + MQTT_CLIENT_TILT_TOPIC;
+                std::string device_cmd_tilt_topic = GetTopicPrefix() + "/" + device_id + MQTT_CLIENT_COMMAND_TILT_TOPIC;
+                std::string device_cmd_fav_pos_topic = GetTopicPrefix() + "/" + device_id + MQTT_CLIENT_COMMAND_FAV_POS_TOPIC;
+                std::string device_platform;
+
+                cJSON *cmp = cJSON_AddObjectToObject(cmps, device_id.c_str());
+                if (cmp == NULL)
+                    error = true;
+                else
+                {
+                    switch (it->second.info.device_type)
+                    {
+                    case DeviceType::VENETIAN_BLIND:
+                    case DeviceType::ROLLER_SHUTTER:
+                    case DeviceType::AWNING:
+                    case DeviceType::WINDOW_OPENER:
+                    case DeviceType::GARAGE_OPENER:
+                    case DeviceType::GATE_OPENER:
+                    case DeviceType::ROLLING_DOOR_OPENER:
+                    case DeviceType::BLIND:
+                    case DeviceType::DUAL_SHUTTER:
+                    case DeviceType::HORIZONTAL_AWNING:
+                    case DeviceType::EXTERNAL_VENETIAN_BLIND:
+                    case DeviceType::LOUVRE_BLIND:
+                    case DeviceType::CURTAIN_TRACK:
+                    case DeviceType::SWINGING_SHUTTER:
+                    {
+                        // https://www.home-assistant.io/integrations/cover.mqtt/
+                        device_platform = "cover";
+                        if (it->second.info.is_openclose_inverted)
+                        {
+                            error = error || (cJSON_AddNumberToObject(cmp, "position_closed", 0) == NULL); // position_closed
+                            error = error || (cJSON_AddNumberToObject(cmp, "position_open", 100) == NULL); // position_open
+                        }
+                        else
+                        {
+                            error = error || (cJSON_AddNumberToObject(cmp, "position_closed", 100) == NULL); // position_closed
+                            error = error || (cJSON_AddNumberToObject(cmp, "position_open", 0) == NULL);     // position_open
+                        }
+                        error = error || (cJSON_AddStringToObject(cmp, "position_topic", device_position_topic.c_str()) == NULL);         // position_topic
+                        error = error || (cJSON_AddStringToObject(cmp, "set_position_topic", device_cmd_position_topic.c_str()) == NULL); // set_position_topic
+                        // add tilt topics if device supports tilt
+                        if (iohome::deviceTypeSupportsTilt(it->second.info.device_type))
+                        {
+                            error = error || (cJSON_AddStringToObject(cmp, "tilt_status_topic", device_tilt_topic.c_str()) == NULL);       // tilt_status_topic
+                            error = error || (cJSON_AddStringToObject(cmp, "tilt_command_topic", device_cmd_tilt_topic.c_str()) == NULL);  // tilt_command_topic
+                            error = error || (cJSON_AddNumberToObject(cmp, "tilt_closed_value", 0) == NULL);                              // tilt_closed_value
+                            error = error || (cJSON_AddNumberToObject(cmp, "tilt_opened_value", 100) == NULL);                            // tilt_opened_value
+                            error = error || (cJSON_AddNumberToObject(cmp, "tilt_min", 0) == NULL);                                      // tilt_min
+                            error = error || (cJSON_AddNumberToObject(cmp, "tilt_max", 100) == NULL);                                    // tilt_max
+                        }
+                        // add device_class https://www.home-assistant.io/integrations/cover/#device_class
+                        std::string type = "shutter";
+                        switch (it->second.info.device_type)
+                        {
+                        case DeviceType::VENETIAN_BLIND:
+                        case DeviceType::BLIND:
+                        case DeviceType::EXTERNAL_VENETIAN_BLIND:
+                        case DeviceType::LOUVRE_BLIND:
+                            type = "blind";
+                            break;
+                        case DeviceType::ROLLER_SHUTTER:
+                        case DeviceType::DUAL_SHUTTER:
+                        case DeviceType::SWINGING_SHUTTER:
+                            type = "shutter";
+                            break;
+                        case DeviceType::AWNING:
+                        case DeviceType::HORIZONTAL_AWNING:
+                            type = "awning";
+                            break;
+                        case DeviceType::WINDOW_OPENER:
+                            type = "window";
+                            break;
+                        case DeviceType::GARAGE_OPENER:
+                            type = "garage";
+                            break;
+                        case DeviceType::GATE_OPENER:
+                            type = "gate";
+                            break;
+                        case DeviceType::ROLLING_DOOR_OPENER:
+                            type = "door";
+                            break;
+                        case DeviceType::CURTAIN_TRACK:
+                            type = "curtain";
+                            break;
+                        default:
+                            type = "None";
+                            break;
+                        }
+                        error = error || (cJSON_AddStringToObject(cmp, "device_class", type.c_str()) == NULL); // device_class
+                        // add "favorite position" button as a separate component
+                        if (!error)
+                        {
+                            cJSON *fav = cJSON_AddObjectToObject(cmps, device_id_fav.c_str());
+                            if (fav == NULL)
+                                error = true;
+                            else
+                            {
+                                error = error || (cJSON_AddStringToObject(fav, "p", "button") == NULL);                      // platform
+                                error = error || (cJSON_AddStringToObject(fav, "unique_id", device_id_fav.c_str()) == NULL); // unique_id
+                                std::string favName = it->second.info.name + std::string(" Favorite position");
+                                error = error || (cJSON_AddStringToObject(fav, "name", favName.c_str()) == NULL);                           // name
+                                error = error || (cJSON_AddStringToObject(fav, "command_topic", device_cmd_fav_pos_topic.c_str()) == NULL); // command_topic
+                            }
+                        }
+                        break;
+                    }
+                    case DeviceType::LIGHT:
+                        // https://www.home-assistant.io/integrations/light.mqtt/
+                        device_platform = "light";
+                        error = error || (cJSON_AddStringToObject(cmp, "optimistic", "true") == NULL); // optimistic
+                        // TODO: manage brightness, waiting for feedback
+                        break;
+                    case DeviceType::ON_OFF_SWITCH:
+                        // https://www.home-assistant.io/integrations/switch.mqtt/
+                        device_platform = "switch";
+                        error = error || (cJSON_AddStringToObject(cmp, "optimistic", "true") == NULL); // optimistic
+                        break;
+                    case DeviceType::LOCK:
+                        // https://www.home-assistant.io/integrations/lock.mqtt/
+                        device_platform = "lock";
+                        break;
+                    // other device types we don't support yet so don't send MQTT discovery for now
+                    case DeviceType::UNKNOWN:
+                    case DeviceType::UNKNOWN_0B:
+                    case DeviceType::BEACON:
+                    case DeviceType::HEATING_TEMPERATURE_INTERFACE:
+                    case DeviceType::VENTILATION_POINT:
+                    case DeviceType::EXTERIOR_HEATING:
+                    case DeviceType::HEAT_PUMP:
+                    case DeviceType::INTRUSION_ALARM:
+                    default:
+                        ESP_LOGE(TAG, "Failed to add device to MQTT discovery: type not managed! (%d)", it->second.info.device_type);
+                        cJSON_Delete(discovery);
+                        continue; // skip this device entirely
+                    }
+                    // Common fields for all supported device types
+                    error = error || (cJSON_AddStringToObject(cmp, "p", device_platform.c_str()) == NULL);             // platform
+                    error = error || (cJSON_AddStringToObject(cmp, "unique_id", device_id.c_str()) == NULL);           // unique_id
+                    error = error || (cJSON_AddStringToObject(cmp, "name", it->second.info.name) == NULL);             // name
+                    error = error || (cJSON_AddStringToObject(cmp, "command_topic", device_cmd_topic.c_str()) == NULL); // command_topic
+                    error = error || (cJSON_AddStringToObject(cmp, "state_topic", device_state_topic.c_str()) == NULL); // state_topic
+                }
+            }
+
+            // Shared availability — uses controller's status topic
+            error = error || (cJSON_AddStringToObject(discovery, "availability_topic", availability_topic.c_str()) == NULL);
+
+            // Publish this IO device's discovery
+            if (!error)
+            {
+                std::string topic = discoveryBase + "/" + device_id + MQTT_CLIENT_DISCOVERY_TOPIC;
+                const char *data = cJSON_Print(discovery);
+                if (data == NULL)
+                {
+                    ESP_LOGE(TAG, "Failed to create IO device discovery string for %s", it->first.c_str());
+                }
+                else
+                {
+                    esp_mqtt_client_publish(mMqttClientHandle, topic.c_str(), data, 0, 0, 1);
+                    cJSON_free((void *)data);
+                    ESP_LOGD(TAG, "Sent IO device discovery for %s", it->first.c_str());
+                }
+            }
+            cJSON_Delete(discovery);
+        }
+        ESP_LOGI(TAG, "Sent all IO device discoveries");
     }
     void MqttHelpers::SendIoDeviceStatus(const std::string &deviceId)
     {

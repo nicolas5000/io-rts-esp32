@@ -25,7 +25,8 @@ namespace Helpers
         /// @return ESP_OK if no error, ESP_ERR_NOT_ALLOWED if MQTT is not enabled in configuration or already started, ...
         esp_err_t StartMqttClient();
 
-        /// @brief Send a discovery message compatible with Home Assistant
+        /// @brief Send discovery messages compatible with Home Assistant
+        /// Sends a controller device discovery and a separate discovery for each IO device (linked via via_device)
         void SendDiscovery();
 
         /// @brief Send MQTT device status message for IO device
@@ -47,6 +48,12 @@ namespace Helpers
         void SendLog(const std::string &log);
 
     private:
+        /// @brief Send controller device discovery message (reboot, config, management components)
+        void SendControllerDiscovery();
+
+        /// @brief Send individual discovery messages for each connected IO device (linked to controller via via_device)
+        void SendIoDevicesDiscovery();
+
         IoRts::IoRtsManager *mIoRtsManager;         // Pointer to IoRtsManager object
         bool mStarted;                              // true if client is started
         bool mIsIoHomePassive;                      // true if IO Home is in passive mode

@@ -62,7 +62,7 @@ namespace iohome
         uint8_t data[8];
         data[0] = 0x01; // Command Originator => User Remote Control
         data[1] = 0xE7; // ACEI => same as captured tilt commands
-        data[2] = CMD_PARAM_POSITION_STOP; // 0xD2 = STOP_POSITION parameter marker
+        data[2] = CMD_PARAM_POSITION_UNKNOWN; // 0xD4 = CMD_PARAM_POSITION_UNKNOWN parameter marker -> should not stop/change pos if moving
         data[3] = 0x00;
         data[4] = 0x20; // separator/flag (as observed in captures)
         // Convert open percentage to closed value: closed_value = (100 - tilt_percent) * 0xC800 / 100

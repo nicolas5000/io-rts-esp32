@@ -48,6 +48,15 @@ namespace Config
         /// @return ESP_OK if configuration put to storage without error
         static esp_err_t SetIoNodeId(const std::string &ioNodeId);
 
+        /// @brief Get ignore auto-update flag from configuration storage
+        /// @return true if auto-update (0x80) flag should be ignored and timer value used instead
+        static bool isIgnoreAutoUpdateEnabled();
+
+        /// @brief Set ignore auto-update flag to configuration storage
+        /// @param ignoreAutoUpdate true to ignore auto-update flag and use timer value
+        /// @return ESP_OK if configuration put to storage without error
+        static esp_err_t SetIgnoreAutoUpdate(bool ignoreAutoUpdate);
+
         /// @brief Get TX Power from configuration storage
         /// @return TX Power (dBm)
         static uint8_t GetTxPower();

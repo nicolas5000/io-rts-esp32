@@ -73,6 +73,15 @@ namespace iohome
     /// @return true if verbose logging enabled
     bool isVerbose() { return mVerbose; }
 
+    /// @brief Set ignore auto-update flag. When enabled, the timer value from device response is used
+    ///        instead of trusting the device to send a proactive status update (0x71).
+    /// @param enable true to ignore auto-update flag and use timer, false to trust auto-update
+    void SetIgnoreAutoUpdate(bool enable) { mIgnoreAutoUpdate = enable; }
+
+    /// @brief Get ignore auto-update flag
+    /// @return true if auto-update flag is ignored
+    bool isIgnoreAutoUpdate() { return mIgnoreAutoUpdate; }
+
     /// @brief Get active/passive mode. Was set by calling Begin().
     /// @return true if active, false if passive (no radio transmission, only listening)
     bool isPassive() { return mPassiveMode; }
@@ -201,6 +210,7 @@ namespace iohome
     bool mReceiving;   // true if StartReceive has been called (and no call to StopReceive!)
     bool mVerbose;     // true if verbose mode (logs are sent to registered callback)
     bool mPassiveMode; // true if passive mode (will not send frames to radio, only listening)
+    bool mIgnoreAutoUpdate; // true to ignore auto-update flag (0x80) and use timer value instead
 
     /// @brief Transmit a frame
     /// @param frame IoFrame to transmit

@@ -244,6 +244,7 @@ namespace IoRts
             if (mIoHome != nullptr)
             {
                 mIoHome->SetVerbose(IoHomeConfig::isLoggingEnabled());
+                mIoHome->SetIgnoreAutoUpdate(IoHomeConfig::isIgnoreAutoUpdateEnabled());
                 mIoHome->Begin(IoHomeConfig::GetIoNodeId(), IoHomeConfig::GetIoSystemKey(), IoHomeConfig::isPassiveModeEnabled());
                 mIoHome->ConfigureRadio(IoHomeConfig::GetTxPower());
             }

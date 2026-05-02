@@ -9,6 +9,7 @@ static const std::string IOHOME_CONFIG_PASSIVE_ENABLE = "passive_enabled"; // Ke
 static const std::string IOHOME_CONFIG_SYSTEM_KEY = "system_key";          // Key to store IO System key (string representation of 16 bytes)
 static const std::string IOHOME_CONFIG_NODE_ID = "node_id";                // Key to store our own node ID (string representation of 3 bytes)
 static const std::string IOHOME_CONFIG_TX_POWER = "tx_power";              // Key to store Tx power (uint8_t)
+static const std::string IOHOME_CONFIG_IGNORE_AUTO_UPDATE = "ign_autoupd"; // Key to store ignore auto-update flag (uint8_t)
 
 using namespace Helpers;
 
@@ -21,6 +22,7 @@ namespace Config
         NvsHelpers::DeleteValue(IOHOME_CONFIG_NAMESPACE, IOHOME_CONFIG_SYSTEM_KEY);
         NvsHelpers::DeleteValue(IOHOME_CONFIG_NAMESPACE, IOHOME_CONFIG_NODE_ID);
         NvsHelpers::DeleteValue(IOHOME_CONFIG_NAMESPACE, IOHOME_CONFIG_TX_POWER);
+        NvsHelpers::DeleteValue(IOHOME_CONFIG_NAMESPACE, IOHOME_CONFIG_IGNORE_AUTO_UPDATE);
     }
     bool IoHomeConfig::isLoggingEnabled()
     {
@@ -73,6 +75,21 @@ namespace Config
     {
         if (ioNodeId.length() != 6) return ESP_ERR_INVALID_ARG;
         return NvsHelpers::SetString(IOHOME_CONFIG_NAMESPACE, IOHOME_CONFIG_NODE_ID, ioNodeId);
+    }
+    bool IoHomeConfig::isIgnoreAutoUpdateEnabled()
+    {
+#ifdef CONFIG_IOHOMECONTROL_IGNORE_AUTO_UPDATE
+        uint8_t is_enabled = true;
+#else
+        uint8_t is_enabled = false;
+#endif
+        NvsHelpers::GetValue(IOHOME_CONFIG_NAMESPACE, IOHOME_CONFIG_IGNORE_AUTO_UPDATE, is_enabled);
+        return is_enabled;
+    }
+    esp_err_t IoHomeConfig::SetIgnoreAutoUpdate(bool ignoreAutoUpdate)
+    {
+        uint8_t is_enabled = ignoreAutoUpdate ? 0x01 : 0x00;
+        return NvsHelpers::SetValue(IOHOME_CONFIG_NAMESPACE, IOHOME_CONFIG_IGNORE_AUTO_UPDATE, is_enabled);
     }
     uint8_t IoHomeConfig::GetTxPower()
     {

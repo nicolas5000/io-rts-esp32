@@ -53,6 +53,7 @@ If you choose Ethernet connectivity in the main parameters, this section permits
 This section permits to configure:
 - Enable logging in IO-HomeControl layer (all logs from the IO-HomeControl layer will be sent to command line interface, and MQTT log topic if MQTT is configured)
 - Passive mode only (ESP32 is not allowed to emit)
+- Ignore auto-update flag: when enabled, the estimated time from device responses is used to schedule status polls instead of trusting the device to send a proactive update. Useful when the device sends its auto-update to a different controller address.
 - IO System key, choose an unique value for your site
 - IO Node ID, choose unique value for your ESP32 to identify itself when sending commands to IO devices
 - TX Power (dBm), choose a value high enough to control your devices. A bigger value means more people around you could listen what you do...

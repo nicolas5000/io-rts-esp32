@@ -348,7 +348,8 @@ namespace iohome
       : mRadio(radio),
         mInitialized(false),
         mReceiving(false),
-        mVerbose(true)
+        mVerbose(true),
+        mIgnoreAutoUpdate(false)
   {
     memset(mOwnNodeId, 0, NODE_ID_SIZE);
     memset(mSystemKey, 0, AES_KEY_SIZE);
@@ -1609,11 +1610,11 @@ namespace iohome
         else
         {
           // Currently moving, try to guess when we should have next status update
-          if (statusFrame.data[1] & CMD_PARAM_STATUS_EXPECTED)
+          if ((statusFrame.data[1] & CMD_PARAM_STATUS_EXPECTED) && !mIgnoreAutoUpdate)
             deviceIt->second.next_status_update_timestamp = esp_timer_get_time() + STATUS_UPDATE_AUTO_MARGIN_US;
           else
           {
-            // We will not receive new status automatically, so let's see if device provides an estimated time
+            // We will not receive new status automatically (or ignoring auto-update), so let's see if device provides an estimated time
             if (statusFrame.data[7] != 0xFF && statusFrame.data[7] != 0x00)
             {
               // We have an estimate in seconds
@@ -1673,11 +1674,11 @@ namespace iohome
         else
         {
           // Currently moving, try to guess when we should have next status update
-          if (statusFrame.data[1] & CMD_PARAM_STATUS_EXPECTED)
+          if ((statusFrame.data[1] & CMD_PARAM_STATUS_EXPECTED) && !mIgnoreAutoUpdate)
             deviceIt->second.next_status_update_timestamp = esp_timer_get_time() + STATUS_UPDATE_AUTO_MARGIN_US;
           else
           {
-            // We will not receive new status automatically, so let's see if device provides an estimated time
+            // We will not receive new status automatically (or ignoring auto-update), so let's see if device provides an estimated time
             if (statusFrame.data[10] != 0xFF && statusFrame.data[10] != 0x00)
             {
               // We have an estimate in seconds

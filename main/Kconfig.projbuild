@@ -196,6 +196,15 @@ menu "IO RTS Project Configuration"
             bool "Passive only (not allowed to emit)"
             default y
 
+        config IOHOMECONTROL_IGNORE_AUTO_UPDATE
+            bool "Ignore auto-update flag and use timer value"
+            default n
+            help
+                When enabled, the device response flag indicating a proactive status update (0x71) will be
+                ignored. Instead, the estimated time provided by the device is used to schedule the next
+                status poll. Enable this if your devices report the auto-update flag but you never receive
+                the proactive update (e.g. because the device sends it to a different controller address).
+
         config IOHOMECONTROL_DEFAULT_KEY
             string "IO System key (16 bytes)"
             default "00112233445566778899AABBCCDDEEFF"

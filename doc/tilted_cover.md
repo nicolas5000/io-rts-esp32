@@ -35,9 +35,9 @@ tilt_hex = (100 - open_percent) * 0xC800 / 100
 
 ```
 CTRL0 = 50, payload 8 bytes:
-  01 E7 D2 00 20 TT TT 00
+  01 E7 D4 00 20 TT TT 00
 
-  D2    = STOP_POSITION parameter marker (keeps current position)
+  D4 00 = target position value or marker (D2 = stop, D4 = unknown/do nothing)
   20    = tilt parameter flag
   TT TT = tilt value (closed %, big-endian)
 ```
@@ -73,25 +73,24 @@ Returned after EXECUTE_REQUEST or from basic `030000` query.
 ```
 [0]    status byte (bit 0 = stopped)
 [1]    flags (bit 7 = STATUS_EXPECTED)
-[2-3]  target position OR D2 marker (if tilt operation)
+[2-3]  target position or marker (e.g. D2 00 = stopped at current, D4 00 = keep position for tilt)
 [4-5]  current position
 [6-7]  timer/unknown
 [8-10] originator node ID
 [11]   01
-[12-13] tilt (closed %) — may be 0000 if basic query
+[12-13] tilt (closed %) — unreliable (often 0000 after commands), do not use for tilt extraction
 ```
 
-When `byte[2] == 0xD2`: tilt operation in progress, bytes [2-3] are NOT a position target.
+When `byte[2] == 0xD2`: device stopped at current position (also seen on non-tilt-capable devices). When `byte[2] == 0xD4`: keep position (used during tilt operations). Bytes [2-3] are always treated as a target position value; marker values (D2, D4) simply exceed the valid position range.
 
 ### 16-byte (CTRL0=98)
 
-Returned in response to `03200100` on tilt-capable devices.
+Returned in response to `03200100` on tilt-capable devices. This is the only reliable source for tilt values.
 
 ```
 [0]    status byte (bit 0 = stopped)
 [1]    flags
-[2]    D2 marker
-[3]    00
+[2-3]  target position or marker (e.g. D2 00, D4 00, etc.)
 [4-5]  current position
 [6-7]  unknown
 [8-10] originator node ID

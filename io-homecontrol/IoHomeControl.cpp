@@ -1557,74 +1557,42 @@ namespace iohome
         deviceIt->second.is_stopped = (statusFrame.data[0] & CMD_PARAM_STATUS_STOPPED) ? true : false;
         deviceIt->second.last_status_timestamp = esp_timer_get_time();
 
-        // Check if byte[2] is the D2 (STOP_POSITION) parameter marker
-        // When D2 is present, it means the last operation was tilt-related and bytes 2-3 are NOT a target position
-        bool isTiltResponse = (statusFrame.data[2] == CMD_PARAM_POSITION_STOP);
-
-        if (statusFrame.data_len >= 16 && isTiltResponse)
+        // [0] status, [1] flags, [2-3] target position or marker (D2=stop, D4=do nothing),
+        // [4-5] current position, [6-7] timer/unknown, [8-10] originator, [11] 01
+        uint16_t tmpTargetPos = statusFrame.data[2] << 8 | statusFrame.data[3];
+        uint16_t tmpCurrentPos = statusFrame.data[4] << 8 | statusFrame.data[5];
+        if (tmpTargetPos <= CMD_PARAM_STATUS_POS_MAX)
+          deviceIt->second.target = tmpTargetPos * 100.0 / CMD_PARAM_STATUS_POS_MAX;
+        else if (deviceIt->second.is_stopped && tmpCurrentPos <= CMD_PARAM_STATUS_POS_MAX)
+          deviceIt->second.target = tmpCurrentPos * 100.0 / CMD_PARAM_STATUS_POS_MAX; // Marker value (D2/D4), use current as target
+        else
+          deviceIt->second.target = UNKNOWN_POSITION;
+        if (tmpCurrentPos <= CMD_PARAM_STATUS_POS_MAX)
+          deviceIt->second.position = tmpCurrentPos * 100.0 / CMD_PARAM_STATUS_POS_MAX;
+        else
         {
-          // 16-byte tilt-extended response format (from 03200100 status query):
-          // [0] status, [1] flags, [2] D2, [3] 00, [4-5] current position,
-          // [6-7] unknown, [8-10] originator, [11] 01, [12] 20, [13-14] tilt value, [15] 00
-          uint16_t tmpCurrentPos = statusFrame.data[4] << 8 | statusFrame.data[5];
-          if (tmpCurrentPos <= CMD_PARAM_STATUS_POS_MAX)
+          // Current position is unknown... let's try to guess it
+          if (deviceIt->second.is_stopped)
           {
-            deviceIt->second.position = tmpCurrentPos * 100.0 / CMD_PARAM_STATUS_POS_MAX;
-            if (deviceIt->second.is_stopped)
-              deviceIt->second.target = deviceIt->second.position; // Tilt operation complete, position target = current
+            if (tmpTargetPos <= CMD_PARAM_STATUS_POS_MAX)
+              deviceIt->second.position = deviceIt->second.target;
+            else
+              deviceIt->second.position = UNKNOWN_POSITION;
           }
-          uint16_t tmpTiltClosed = statusFrame.data[13] << 8 | statusFrame.data[14];
-          if (tmpTiltClosed <= CMD_PARAM_STATUS_POS_MAX)
-            deviceIt->second.tilt = 100.0 - (tmpTiltClosed * 100.0 / CMD_PARAM_STATUS_POS_MAX); // Convert from "closed %" to "open %"
-          else
-            deviceIt->second.tilt = UNKNOWN_POSITION;
         }
-        else if (!isTiltResponse)
+
+        // Extract tilt value from 16-byte tilt-extended response only (from 03200100 query)
+        // 14-byte responses have unreliable tilt data (often 0000 which is ambiguous)
+        if (deviceTypeSupportsTilt(deviceIt->second.info.device_type))
         {
-          // Standard 14-byte position response format:
-          // [0] status, [1] flags, [2-3] target position, [4-5] current position,
-          // [6-7] timer, [8-10] originator, [11] 01, [12-13] tilt (closed %) for tilt devices, else zero
-          uint16_t tmpTargetPos = statusFrame.data[2] << 8 | statusFrame.data[3];
-          uint16_t tmpCurrentPos = statusFrame.data[4] << 8 | statusFrame.data[5];
-          if (tmpTargetPos <= CMD_PARAM_STATUS_POS_MAX)
-            deviceIt->second.target = tmpTargetPos * 100.0 / CMD_PARAM_STATUS_POS_MAX;
-          else
-            deviceIt->second.target = UNKNOWN_POSITION;
-          if (tmpCurrentPos <= CMD_PARAM_STATUS_POS_MAX)
-            deviceIt->second.position = tmpCurrentPos * 100.0 / CMD_PARAM_STATUS_POS_MAX;
-          else
+          if (statusFrame.data_len >= 16)
           {
-            // Current position is unknown... let's try to guess it
-            if (deviceIt->second.is_stopped)
-            {
-              if (tmpTargetPos <= CMD_PARAM_STATUS_POS_MAX)
-                deviceIt->second.position = deviceIt->second.target;
-              else
-                deviceIt->second.position = UNKNOWN_POSITION;
-            }
-          }
-          // Extract tilt from bytes [12-13] for tilt-capable devices
-          if (statusFrame.data_len >= 14 && deviceTypeSupportsTilt(deviceIt->second.info.device_type))
-          {
-            uint16_t tmpTiltClosed = statusFrame.data[12] << 8 | statusFrame.data[13];
+            // 16-byte tilt-extended response: tilt at [13-14]
+            uint16_t tmpTiltClosed = statusFrame.data[13] << 8 | statusFrame.data[14];
             if (tmpTiltClosed <= CMD_PARAM_STATUS_POS_MAX)
               deviceIt->second.tilt = 100.0 - (tmpTiltClosed * 100.0 / CMD_PARAM_STATUS_POS_MAX);
             else
               deviceIt->second.tilt = UNKNOWN_POSITION;
-          }
-        }
-        else
-        {
-          // 14-byte tilt response (byte[2]=D2, data_len < 16): immediate response to tilt command
-          // [0] status, [1] flags, [2] D2, [3] 00, [4-5] current position,
-          // [6-7] unknown, [8-10] originator, [11] 01, [12-13] unknown/zero
-          // Don't overwrite target from bytes 2-3 (D2 marker, not a position)
-          uint16_t tmpCurrentPos = statusFrame.data[4] << 8 | statusFrame.data[5];
-          if (tmpCurrentPos <= CMD_PARAM_STATUS_POS_MAX)
-          {
-            deviceIt->second.position = tmpCurrentPos * 100.0 / CMD_PARAM_STATUS_POS_MAX;
-            if (deviceIt->second.is_stopped)
-              deviceIt->second.target = deviceIt->second.position; // Tilt operation complete, position target = current
           }
         }
 

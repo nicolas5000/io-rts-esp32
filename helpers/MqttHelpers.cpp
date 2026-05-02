@@ -39,8 +39,9 @@ static const std::string MQTT_CLIENT_LINK_REMOTE_ID = "LinkIoRemote";        // 
 static const std::string MQTT_CLIENT_REM_REMOTE_ID = "RemoveIoRemote";       // unique id and action for "RemoveRemote" component
 static const std::string MQTT_CLIENT_SET_DEVICE_NAME_ID = "SetIoDeviceName"; // unique id and action for "SetDeviceName" component
 
-static const std::string MQTT_CLIENT_PREFIX_IO = "io_";      // unique_id prefix for IO devices
-static const std::string MQTT_CLIENT_SUFFIX_FAV_IO = "_fav"; // unique_id suffix for IO devices "favorite" button
+static const std::string MQTT_CLIENT_PREFIX_IO = "io_";          // unique_id prefix for IO devices
+static const std::string MQTT_CLIENT_SUFFIX_FAV_IO = "_fav";    // unique_id suffix for IO devices "favorite" button
+static const std::string MQTT_CLIENT_SUFFIX_IDENTIFY = "_ident"; // unique_id suffix for IO devices "identify" button
 
 static const std::string MQTT_CLIENT_BIRTH_WILL_TOPIC = "/status"; // birth and last will topic
 static const std::string MQTT_CLIENT_BIRTH_MSG = "online";         // last will message - birth
@@ -338,6 +339,10 @@ namespace Helpers
                                 else if (command.compare("UNLOCK") == 0)
                                 {
                                     mqttHelper->GetIoRtsManager()->mIoHome->SetDevicePosition(deviceID, SWITCH_LIGHT_ON_POSITION); // not sure, wait for feedback
+                                }
+                                else if (command.compare("IDENTIFY") == 0)
+                                {
+                                    mqttHelper->GetIoRtsManager()->mIoHome->IdentifyDevice(deviceID);
                                 }
                             }
                             else if (topic_str.ends_with(MQTT_CLIENT_COMMAND_POSITION_TOPIC)) // it should be a position between 0 and 100
@@ -934,6 +939,27 @@ namespace Helpers
                     error = error || (cJSON_AddStringToObject(cmp, "name", it->second.info.name) == NULL);              // name
                     error = error || (cJSON_AddStringToObject(cmp, "command_topic", device_cmd_topic.c_str()) == NULL); // command_topic
                     error = error || (cJSON_AddStringToObject(cmp, "state_topic", device_state_topic.c_str()) == NULL); // state_topic
+                }
+
+                // add "identify" button as a separate component for all device types
+                if (!error)
+                {
+                    std::string device_id_ident = MQTT_CLIENT_PREFIX_IO + it->first + MQTT_CLIENT_SUFFIX_IDENTIFY;
+                    std::string device_cmd_topic = GetTopicPrefix() + "/" + device_id + MQTT_CLIENT_COMMAND_TOPIC;
+                    cJSON *ident = cJSON_AddObjectToObject(cmps, device_id_ident.c_str());
+                    if (ident == NULL)
+                        error = true;
+                    else
+                    {
+                        error = error || (cJSON_AddStringToObject(ident, "p", "button") == NULL);                        // platform
+                        error = error || (cJSON_AddStringToObject(ident, "unique_id", device_id_ident.c_str()) == NULL); // unique_id
+                        std::string identName = it->second.info.name + std::string(" Identify");
+                        error = error || (cJSON_AddStringToObject(ident, "name", identName.c_str()) == NULL);                   // name
+                        error = error || (cJSON_AddStringToObject(ident, "command_topic", device_cmd_topic.c_str()) == NULL);    // command_topic — uses /set
+                        error = error || (cJSON_AddStringToObject(ident, "payload_press", "IDENTIFY") == NULL);                 // payload_press
+                        error = error || (cJSON_AddStringToObject(ident, "device_class", "identify") == NULL);                  // device_class
+                        error = error || (cJSON_AddStringToObject(ident, "entity_category", "diagnostic") == NULL);             // entity_category
+                    }
                 }
             }
 

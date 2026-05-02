@@ -8,6 +8,13 @@
 
 namespace iohome
 {
+    /// @brief Create an identify IO Frame (0x1E) — makes the device physically identify itself (e.g., brief jog movement)
+    /// @param frame Output IoFrame structure
+    /// @param own_node_id Source node ID (3 bytes)
+    /// @param dst_node_id Destination node ID (3 bytes) for output frame to create
+    /// @return true on success
+    bool create_identify_request(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id);
+
     /// @brief Create an execute IO Frame (0x00)
     /// @param frame Output IoFrame structure
     /// @param own_node_id Source node ID (3 bytes)

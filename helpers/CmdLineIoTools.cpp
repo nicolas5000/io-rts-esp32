@@ -519,6 +519,44 @@ void register_iodevicefeedback(void)
     ESP_ERROR_CHECK(esp_console_cmd_register(&iodevicefeedback_cmd));
 }
 
+// ******************* IO IDENTIFY DEVICE ********************
+
+/// @brief Structure used by the 'io_identify' command
+static struct
+{
+    struct arg_str *device_id;
+    struct arg_end *end;
+} ioidentify_args;
+
+static int do_ioidentify_cmd(int argc, char **argv)
+{
+    int nerrors = arg_parse(argc, argv, (void **)&ioidentify_args);
+    if (nerrors != 0)
+    {
+        arg_print_errors(stderr, ioidentify_args.end, argv[0]);
+        return 1;
+    }
+    sIoHome->IdentifyDevice(ioidentify_args.device_id->sval[0]);
+    return 0;
+}
+
+void register_ioidentify(void)
+{
+    ioidentify_args.device_id = arg_str1(NULL, NULL, "<deviceid>", "ID of the device, 3 bytes (eg 112233)");
+    ioidentify_args.end = arg_end(1);
+
+    const esp_console_cmd_t ioidentify_cmd = {
+        .command = "io_identify",
+        .help = "Identify an IO-HomeControl device (device will physically identify itself, e.g., brief jog movement)",
+        .hint = NULL,
+        .func = &do_ioidentify_cmd,
+        .argtable = &ioidentify_args,
+        .func_w_context = NULL,
+        .context = NULL};
+
+    ESP_ERROR_CHECK(esp_console_cmd_register(&ioidentify_cmd));
+}
+
 // ******************* IO INVERT DEVICE ********************
 
 /// @brief Structure used by the 'io_invertdevice' command
@@ -857,6 +895,7 @@ void register_io_cmdline_tools(IoRts::IoRtsManager *io_rts_manager)
     register_iolinkremote();
     register_ioremoveremote();
     register_iodevicefeedback();
+    register_ioidentify();
     register_ioinvertdevice();
     register_iosendraw();
     register_iolistdevices();

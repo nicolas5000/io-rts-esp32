@@ -9,6 +9,21 @@
 
 namespace iohome
 {
+    bool create_identify_request(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id)
+    {
+        // Initialize frame for 2W, start of exchange
+        init_frame(frame, true, true, false, false);
+
+        // Set source and destination
+        set_destination(frame, dst_node_id);
+        set_source(frame, own_node_id);
+
+        // Set data: 0x01 = Command Originator (User), 0xFF = identify parameter
+        uint8_t data[2] = {0x01, 0xFF};
+
+        return set_command(frame, CMD_IDENTIFY, data, sizeof(data));
+    }
+
     bool create_execute_request(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id, bool is_low_power, uint8_t position, bool quiet)
     {
         // Initialize frame

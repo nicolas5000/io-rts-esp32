@@ -202,6 +202,11 @@ namespace iohome
     /// @return true if no error
     bool SendRaw(const std::string &rawFrame, uint32_t frequency);
 
+    /// @brief Identify a device — makes it physically identify itself (e.g., brief jog movement)
+    /// @param deviceID Device ID (6 characters as hex representation of the 3 bytes, eg "112233")
+    /// @return true on success, false on error
+    bool IdentifyDevice(const std::string &deviceID);
+
   protected:
     uint8_t mOwnNodeId[NODE_ID_SIZE]; // Our NodeID (3 bytes)
     uint8_t mSystemKey[AES_KEY_SIZE]; // Our system key (16 bytes)

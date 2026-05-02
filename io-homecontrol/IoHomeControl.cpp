@@ -1254,6 +1254,50 @@ namespace iohome
     }
   }
 
+  bool IoHomeControl::IdentifyDevice(const std::string &deviceID)
+  {
+    if (!mInitialized || !mReceiving || mPassiveMode)
+    {
+      IO_LOGE("IdentifyDevice: invalid state! (not initialized or not listening or passive mode)");
+      return false;
+    }
+    std::map<std::string, IoDevice>::iterator it = sDeviceMap.find(deviceID);
+    if (it == sDeviceMap.end())
+    {
+      IO_LOGE("IdentifyDevice: no device found in list!");
+      return false;
+    }
+    else if (it->second.is_deleted)
+    {
+      IO_LOGE("IdentifyDevice: device is marked as deleted, add it before using it!");
+      return false;
+    }
+    if (xSemaphoreTake(sMutex, MUTEX_MAX_WAIT_TICKS))
+    {
+      IoFrame request;
+      IoFrame response;
+      bool ret = false;
+      UBaseType_t currentPriority = uxTaskPriorityGet(NULL);
+      vTaskPrioritySet(NULL, IO_FRAME_PROCESSING_TASK); // change task priority to higher!
+      if (create_identify_request(request, mOwnNodeId, it->second.info.node_id) && SendAndReceive(request, response, FREQUENCY_CHANNEL_2))
+      {
+        ret = true; // command sent and response received (response may be CMD_ERROR_RESPONSE which is expected for identify)
+      }
+      else
+      {
+        IO_LOGE("IdentifyDevice: failed to send request or didn't receive a response!");
+      }
+      vTaskPrioritySet(NULL, currentPriority); // restore task priority
+      xSemaphoreGive(sMutex);
+      return ret;
+    }
+    else
+    {
+      IO_LOGE("IdentifyDevice: failed to take mutex!");
+      return false;
+    }
+  }
+
   void IoHomeControl::InvertOpenClosePositionForDevice(const std::string &deviceID)
   {
     if (!mInitialized || !mReceiving || mPassiveMode)

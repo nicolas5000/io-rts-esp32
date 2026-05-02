@@ -94,6 +94,9 @@ namespace iohome
   constexpr uint8_t CMD_PRIVATE2 = 0x0C;          // No authentication needed
   constexpr uint8_t CMD_PRIVATE2_RESPONSE = 0x0D; // Response to 0x0C
 
+  // Identify command
+  constexpr uint8_t CMD_IDENTIFY = 0x1E; // Authentication needed — makes the device physically identify itself (e.g., brief jog movement)
+
   // Discovery Commands
   constexpr uint8_t CMD_DISCOVER_REQUEST = 0x28;          // No authentication needed, broadcast to 0x00003b
   constexpr uint8_t CMD_DISCOVER_RESPONSE = 0x29;         // Response to 0x28 and 0x2E

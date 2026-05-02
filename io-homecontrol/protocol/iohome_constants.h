@@ -155,6 +155,7 @@ namespace iohome
   constexpr uint8_t CMD_PARAM_STATUS_STOPPED = 0x01;    // In CMD_PRIVATE_RESPONSE and CMD_STATUS_UPDATE, byte0 & 0x01 mens device is not moving
   constexpr uint8_t CMD_PARAM_STATUS_EXPECTED = 0x80;   // In CMD_PRIVATE_RESPONSE and CMD_STATUS_UPDATE, byte1 & 0x80 mens device should send CMD_STATUS_UPDATE
   constexpr uint16_t CMD_PARAM_STATUS_POS_MAX = 0xC800; // 100% closed
+  constexpr uint16_t CMD_PARAM_STATUS_POS_TOLERANCE = 100; // ~0.2% tolerance for position comparison (51200 = 100%)
 
   constexpr uint8_t CMD_PARAM_ERROR_BAD_AUTH = 0x18;
 

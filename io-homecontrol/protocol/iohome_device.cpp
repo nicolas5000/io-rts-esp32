@@ -15,6 +15,14 @@ namespace iohome
             return false;
         }
     }
+
+    bool hasReachedTargetPosition(uint16_t targetPos, uint16_t currentPos)
+    {
+        if (targetPos > CMD_PARAM_STATUS_POS_MAX || currentPos > CMD_PARAM_STATUS_POS_MAX)
+            return false;
+        uint16_t diff = (targetPos > currentPos) ? (targetPos - currentPos) : (currentPos - targetPos);
+        return diff <= CMD_PARAM_STATUS_POS_TOLERANCE;
+    }
     std::string IoDeviceManufacturer(Manufacturer mf)
     {
         switch (mf)

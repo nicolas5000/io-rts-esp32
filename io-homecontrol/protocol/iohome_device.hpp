@@ -41,6 +41,12 @@ namespace iohome
     /// @return true if the device type supports tilt
     bool deviceTypeSupportsTilt(DeviceType type);
 
+    /// @brief Check if target and current positions are close enough to consider the device as having reached its target
+    /// @param targetPos Target position (raw value, 0 to CMD_PARAM_STATUS_POS_MAX)
+    /// @param currentPos Current position (raw value, 0 to CMD_PARAM_STATUS_POS_MAX)
+    /// @return true if both positions are valid and within tolerance
+    bool hasReachedTargetPosition(uint16_t targetPos, uint16_t currentPos);
+
     std::string IoDeviceManufacturer(Manufacturer mf);
     
 } // namespace iohome

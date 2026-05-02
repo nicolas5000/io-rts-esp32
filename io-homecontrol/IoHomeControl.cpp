@@ -13,6 +13,7 @@
 
 #include <stdio.h>
 #include <time.h>
+#include <algorithm>
 #include "esp_log.h"
 #include <ios>
 #include <sstream>
@@ -1620,7 +1621,7 @@ namespace iohome
             if (statusFrame.data[7] != 0xFF && statusFrame.data[7] != 0x00)
             {
               // We have an estimate in seconds
-              deviceIt->second.next_status_update_timestamp = esp_timer_get_time() + statusFrame.data[7] * 1000000 + STATUS_UPDATE_MANUAL_MARGIN_US;
+              deviceIt->second.next_status_update_timestamp = esp_timer_get_time() + std::max(static_cast<int64_t>(statusFrame.data[7]) * 1000000, STATUS_UPDATE_MANUAL_MARGIN_US);
             }
             else
               deviceIt->second.next_status_update_timestamp = esp_timer_get_time() + STATUS_UPDATE_AUTO_MARGIN_US;
@@ -1684,7 +1685,7 @@ namespace iohome
             if (statusFrame.data[10] != 0xFF && statusFrame.data[10] != 0x00)
             {
               // We have an estimate in seconds
-              deviceIt->second.next_status_update_timestamp = esp_timer_get_time() + statusFrame.data[10] * 1000000 + STATUS_UPDATE_MANUAL_MARGIN_US;
+              deviceIt->second.next_status_update_timestamp = esp_timer_get_time() + std::max(static_cast<int64_t>(statusFrame.data[10]) * 1000000, STATUS_UPDATE_MANUAL_MARGIN_US);
             }
             else
               deviceIt->second.next_status_update_timestamp = esp_timer_get_time() + STATUS_UPDATE_AUTO_MARGIN_US;

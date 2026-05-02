@@ -5,6 +5,7 @@
 #include "argtable3/argtable3.h"
 #include "esp_console.h"
 #include "esp_log.h"
+#include <esp_timer.h>
 
 using namespace Config;
 
@@ -556,9 +557,9 @@ void register_ioinvertdevice(void)
     ESP_ERROR_CHECK(esp_console_cmd_register(&ioinvertdevice_cmd));
 }
 
-// ******************* IO INVERT DEVICE ********************
+// ******************* IO SEND RAW ********************
 
-/// @brief Structure used by the 'io_invertdevice' command
+/// @brief Structure used by the 'io_sendraw' command
 static struct
 {
     struct arg_str *raw_frame;
@@ -594,6 +595,37 @@ void register_iosendraw(void)
         .context = NULL};
 
     ESP_ERROR_CHECK(esp_console_cmd_register(&iosendraw_cmd));
+}
+
+// ******************* IO LIST DEVICES ********************
+static int do_iolistdevices_cmd(int argc, char **argv)
+{
+    std::lock_guard<std::mutex> guard(sIoRtsManager->mIoDevicesMutex);
+    for (auto it = sIoRtsManager->mIoDevices.begin(); it != sIoRtsManager->mIoDevices.end(); ++it)
+    {
+        int32_t last_update = (esp_timer_get_time() - it->second.last_status_timestamp) / 1000000;        // seconds ago
+        int32_t next_update = (it->second.next_status_update_timestamp - esp_timer_get_time()) / 1000000; // seconds in the future
+        ESP_LOGI(TAG, "Device ID=%s, Name=%s, type=0x%02X, subtype=0x%02X, Manufacturer=%s, Deleted=%s, Inverted=%s, updated %ds ago, next update in %d seconds",
+                 it->first.c_str(), it->second.info.name,
+                 it->second.info.device_type, it->second.info.device_subtype, IoDeviceManufacturer(it->second.info.manufacturer).c_str(),
+                 it->second.is_deleted ? "Yes" : "No", it->second.info.is_openclose_inverted ? "Yes" : "No",
+                 last_update, next_update);
+    }
+    return 0;
+}
+
+void register_iolistdevices(void)
+{
+    const esp_console_cmd_t iolistdevices_cmd = {
+        .command = "io_listdevices",
+        .help = "List IO devices currently registered.",
+        .hint = NULL,
+        .func = &do_iolistdevices_cmd,
+        .argtable = NULL,
+        .func_w_context = NULL,
+        .context = NULL};
+
+    ESP_ERROR_CHECK(esp_console_cmd_register(&iolistdevices_cmd));
 }
 
 // ******************* IO CONFIG ********************
@@ -827,6 +859,7 @@ void register_io_cmdline_tools(IoRts::IoRtsManager *io_rts_manager)
     register_iodevicefeedback();
     register_ioinvertdevice();
     register_iosendraw();
+    register_iolistdevices();
     register_ioconfig();
     register_iotilt();
 }

@@ -1827,4 +1827,55 @@ namespace iohome
     }
   }
 
+  bool IoHomeControl::DeviceGetBattery(const std::string &deviceID)
+  {
+    if (!mInitialized || !mReceiving || mPassiveMode)
+    {
+      IO_LOGE("DeviceGetBattery: invalid state! (not initialized or not listening or passive mode)");
+      return false;
+    }
+    uint8_t tmpDeviceId[NODE_ID_SIZE];
+    HexStringToBuff(deviceID, tmpDeviceId, NODE_ID_SIZE);
+    if (xSemaphoreTake(sMutex, MUTEX_MAX_WAIT_TICKS))
+    {
+      IoFrame request, response;
+      bool status_ok = false, state_ok = false;
+      uint16_t battery_status = 0, battery_state = 0;
+      bool is_battery_powered = false;
+      UBaseType_t currentPriority = uxTaskPriorityGet(NULL);
+      vTaskPrioritySet(NULL, IO_FRAME_PROCESSING_TASK);
+
+      if (create_getbattery_request(request, mOwnNodeId, tmpDeviceId, 0x06)
+          && SendAndReceive(request, response, FREQUENCY_CHANNEL_2)
+          && response.command_id == CMD_PRIVATE_RESPONSE && response.data_len >= 4)
+      {
+        is_battery_powered = (response.data[1] == 0x60);
+        battery_status = (uint16_t)(response.data[2] << 8) | response.data[3];
+        status_ok = true;
+      }
+
+      if (create_getbattery_request(request, mOwnNodeId, tmpDeviceId, 0x09)
+          && SendAndReceive(request, response, FREQUENCY_CHANNEL_2)
+          && response.command_id == CMD_PRIVATE_RESPONSE && response.data_len >= 4)
+      {
+        battery_state = (uint16_t)(response.data[2] << 8) | response.data[3];
+        state_ok = true;
+      }
+
+      vTaskPrioritySet(NULL, currentPriority);
+      xSemaphoreGive(sMutex);
+
+      if (status_ok || state_ok)
+        IO_LOGI("Battery {}: powered={}, status=0x{:04X}, state=0x{:04X}",
+                deviceID, is_battery_powered ? "battery/solar" : "mains",
+                battery_status, battery_state);
+      else
+        IO_LOGE("DeviceGetBattery {}: no response", deviceID);
+
+      return status_ok || state_ok;
+    }
+    IO_LOGE("DeviceGetBattery: failed to take mutex!");
+    return false;
+  }
+
 } // namespace iohome

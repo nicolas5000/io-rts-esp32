@@ -207,6 +207,11 @@ namespace iohome
     /// @return true on success, false on error
     bool IdentifyDevice(const std::string &deviceID);
 
+    /// @brief Query battery-status (0x06) and battery-state (0x09) via CMD 0x03 and log the result
+    /// @param deviceID Device ID (6 characters as hex representation of the 3 bytes, eg "112233")
+    /// @return true if at least one query succeeded
+    bool DeviceGetBattery(const std::string &deviceID);
+
   protected:
     uint8_t mOwnNodeId[NODE_ID_SIZE]; // Our NodeID (3 bytes)
     uint8_t mSystemKey[AES_KEY_SIZE]; // Our system key (16 bytes)

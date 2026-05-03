@@ -635,6 +635,43 @@ void register_iosendraw(void)
     ESP_ERROR_CHECK(esp_console_cmd_register(&iosendraw_cmd));
 }
 
+// ******************* IO GET BATTERY ********************
+
+static struct
+{
+    struct arg_str *device_id;
+    struct arg_end *end;
+} iogetbattery_args;
+
+static int do_iogetbattery_cmd(int argc, char **argv)
+{
+    int nerrors = arg_parse(argc, argv, (void **)&iogetbattery_args);
+    if (nerrors != 0)
+    {
+        arg_print_errors(stderr, iogetbattery_args.end, argv[0]);
+        return 1;
+    }
+    sIoHome->DeviceGetBattery(iogetbattery_args.device_id->sval[0]);
+    return 0;
+}
+
+void register_iogetbattery(void)
+{
+    iogetbattery_args.device_id = arg_str1(NULL, NULL, "<deviceid>", "ID of the device, 3 bytes (eg 112233)");
+    iogetbattery_args.end = arg_end(1);
+
+    const esp_console_cmd_t cmd = {
+        .command = "io_getbattery",
+        .help = "Query battery-status (0x06) and battery-state (0x09) of an IO-HomeControl device",
+        .hint = NULL,
+        .func = &do_iogetbattery_cmd,
+        .argtable = &iogetbattery_args,
+        .func_w_context = NULL,
+        .context = NULL};
+
+    ESP_ERROR_CHECK(esp_console_cmd_register(&cmd));
+}
+
 // ******************* IO LIST DEVICES ********************
 static int do_iolistdevices_cmd(int argc, char **argv)
 {
@@ -898,6 +935,7 @@ void register_io_cmdline_tools(IoRts::IoRtsManager *io_rts_manager)
     register_ioidentify();
     register_ioinvertdevice();
     register_iosendraw();
+    register_iogetbattery();
     register_iolistdevices();
     register_ioconfig();
     register_iotilt();

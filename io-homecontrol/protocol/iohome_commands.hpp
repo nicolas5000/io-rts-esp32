@@ -171,6 +171,14 @@ namespace iohome
     /// @return true on success
     bool create_getinfo3_request(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id);
 
+    /// @brief Create a battery query IO Frame (0x03) for function IDs 0x06 (battery-status) or 0x09 (battery-state)
+    /// @param frame Output IoFrame structure
+    /// @param own_node_id Source node ID (3 bytes)
+    /// @param dst_node_id Destination node ID (3 bytes)
+    /// @param function_id Private function ID: 0x06 = battery-status, 0x09 = battery-state
+    /// @return true on success
+    bool create_getbattery_request(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id, uint8_t function_id);
+
     /// @brief Create a status update response IO Frame (0x72)
     /// @param frame Output IoFrame structure
     /// @param own_node_id Source node ID (3 bytes)

@@ -1337,12 +1337,16 @@ namespace iohome
     }
     uint8_t buffer[FRAME_MAX_SIZE];
     HexStringToBuff(rawFrame, buffer, FRAME_MAX_SIZE);
+    uint8_t actualLen = rawFrame.length() / 2;
+    buffer[0] = (buffer[0] & ~CTRL0_LENGTH_MASK) | ((actualLen - 1) & CTRL0_LENGTH_MASK);
     IoFrame request;
-    if (parse_frame(buffer, rawFrame.length() / 2, request))
+    if (parse_frame(buffer, actualLen, request))
     {
       if (xSemaphoreTake(sMutex, MUTEX_MAX_WAIT_TICKS))
       {
         bool ret = false;
+        UBaseType_t currentPriority = uxTaskPriorityGet(NULL);
+        vTaskPrioritySet(NULL, IO_FRAME_PROCESSING_TASK);
         if (is_end(request))
         {
           ret = TransmitFrame(request, frequency, is_start(request) ? LONG_PREAMBLE_LENGTH : SHORT_PREAMBLE_LENGTH);
@@ -1352,6 +1356,7 @@ namespace iohome
           IoFrame response;
           ret = SendAndReceive(request, response, frequency);
         }
+        vTaskPrioritySet(NULL, currentPriority);
         xSemaphoreGive(sMutex);
         return ret;
       }

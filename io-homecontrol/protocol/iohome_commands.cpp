@@ -337,8 +337,8 @@ namespace iohome
 
     bool create_getname_request(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id)
     {
-        // Initialize frame
-        init_frame(frame, true, true, false, false);
+        // Initialize frame — LOW_POWER flag required for solar/battery devices to respond
+        init_frame(frame, true, true, false, true);
 
         // Set source and destination
         set_destination(frame, dst_node_id);
@@ -366,8 +366,8 @@ namespace iohome
 
     bool create_getinfo1_request(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id)
     {
-        // Initialize frame
-        init_frame(frame, true, true, false, false);
+        // Initialize frame — LOW_POWER flag required for solar/battery devices to respond
+        init_frame(frame, true, true, false, true);
 
         // Set source and destination
         set_destination(frame, dst_node_id);
@@ -378,8 +378,8 @@ namespace iohome
 
     bool create_getinfo2_request(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id)
     {
-        // Initialize frame
-        init_frame(frame, true, true, false, false);
+        // Initialize frame — LOW_POWER flag required for solar/battery devices to respond
+        init_frame(frame, true, true, false, true);
 
         // Set source and destination
         set_destination(frame, dst_node_id);
@@ -390,8 +390,8 @@ namespace iohome
 
     bool create_getinfo3_request(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id)
     {
-        // Initialize frame
-        init_frame(frame, true, true, false, false);
+        // Initialize frame — LOW_POWER flag required for solar/battery devices to respond
+        init_frame(frame, true, true, false, true);
 
         // Set source and destination
         set_destination(frame, dst_node_id);

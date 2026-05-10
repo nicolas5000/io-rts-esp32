@@ -12,8 +12,9 @@ namespace iohome
     /// @param frame Output IoFrame structure
     /// @param own_node_id Source node ID (3 bytes)
     /// @param dst_node_id Destination node ID (3 bytes) for output frame to create
+    /// @param is_low_power 'Low power' flag to set
     /// @return true on success
-    bool create_identify_request(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id);
+    bool create_identify_request(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id, bool is_low_power);
 
     /// @brief Create an execute IO Frame (0x00)
     /// @param frame Output IoFrame structure
@@ -138,8 +139,9 @@ namespace iohome
     /// @param frame Output IoFrame structure
     /// @param own_node_id Source node ID (3 bytes)
     /// @param dst_node_id Destination node ID (3 bytes) for output frame to create
+    /// @param is_low_power 'Low power' flag to set
     /// @return true on success
-    bool create_getname_request(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id);
+    bool create_getname_request(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id, bool is_low_power);
 
     /// @brief Create a SetName IO Frame (0x52)
     /// @param frame Output IoFrame structure
@@ -154,22 +156,25 @@ namespace iohome
     /// @param frame Output IoFrame structure
     /// @param own_node_id Source node ID (3 bytes)
     /// @param dst_node_id Destination node ID (3 bytes) for output frame to create
+    /// @param is_low_power 'Low power' flag to set
     /// @return true on success
-    bool create_getinfo1_request(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id);
+    bool create_getinfo1_request(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id, bool is_low_power);
 
     /// @brief Create a GetInfo2 IO Frame (0x56)
     /// @param frame Output IoFrame structure
     /// @param own_node_id Source node ID (3 bytes)
     /// @param dst_node_id Destination node ID (3 bytes) for output frame to create
+    /// @param is_low_power 'Low power' flag to set
     /// @return true on success
-    bool create_getinfo2_request(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id);
+    bool create_getinfo2_request(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id, bool is_low_power);
 
     /// @brief Create a GetInfo3 IO Frame (0x58)
     /// @param frame Output IoFrame structure
     /// @param own_node_id Source node ID (3 bytes)
     /// @param dst_node_id Destination node ID (3 bytes) for output frame to create
+    /// @param is_low_power 'Low power' flag to set
     /// @return true on success
-    bool create_getinfo3_request(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id);
+    bool create_getinfo3_request(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id, bool is_low_power);
 
     /// @brief Create a battery query IO Frame (0x03) for function IDs 0x06 (battery-status) or 0x09 (battery-state)
     /// @param frame Output IoFrame structure
@@ -198,6 +203,7 @@ namespace iohome
     /// @param frame Output IoFrame structure
     /// @param own_node_id Source node ID (3 bytes)
     /// @param dst_node_id Destination node ID (3 bytes) for output frame to create
+    /// @param is_low_power 'Low power' flag to set
     /// @return true on success
-    bool create_set_config1_command(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id);
+    bool create_set_config1_command(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id, bool is_low_power);
 } // namespace iohome

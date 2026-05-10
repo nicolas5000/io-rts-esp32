@@ -85,6 +85,7 @@ namespace Helpers
 
         // Flags
         cJSON_AddBoolToObject(root, "open_close_inverted", dev.info.is_openclose_inverted);
+        cJSON_AddBoolToObject(root, "is_low_power", dev.info.is_low_power);
 
         // Linked remotes
         cJSON *remotes = cJSON_AddArrayToObject(root, "remotes");
@@ -212,6 +213,9 @@ namespace Helpers
         cJSON *openCloseInvertedItem = cJSON_GetObjectItem(root, "open_close_inverted");
         if (cJSON_IsBool(openCloseInvertedItem))
             dev.info.is_openclose_inverted = cJSON_IsTrue(openCloseInvertedItem);
+
+        cJSON *isLowPowerItem = cJSON_GetObjectItem(root, "is_low_power");
+        dev.info.is_low_power = cJSON_IsBool(isLowPowerItem) ? cJSON_IsTrue(isLowPowerItem) : true;
 
         // Initialize runtime fields
         dev.is_stopped = true;

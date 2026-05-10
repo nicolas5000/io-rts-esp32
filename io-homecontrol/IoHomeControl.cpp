@@ -374,7 +374,7 @@ namespace iohome
     sDeviceStatusCallback = deviceStatusCallback;
 
     // Create logger queue and task
-    sLogQueue = xQueueCreate(10, sizeof(LogQueueItem));
+    sLogQueue = xQueueCreate(50, sizeof(LogQueueItem));
     xTaskCreate(process_log_task, "process_log_task", 4096, this, LOG_CALLBACK_PRIORITY, NULL);
 
     // Create IoDevice status queue and task
@@ -840,7 +840,7 @@ namespace iohome
                   }
                 }
                 // Finally try to configure device to send its status (we don't stop if refused as not all devices support it!)
-                if (create_set_config1_command(request, mOwnNodeId, device.info.node_id) && SendAndReceive(request, response, FREQUENCY_CHANNEL_2))
+                if (create_set_config1_command(request, mOwnNodeId, device.info.node_id, device.info.is_low_power) && SendAndReceive(request, response, FREQUENCY_CHANNEL_2))
                 {
                   if (response.command_id == CMD_ERROR_RESPONSE)
                   {
@@ -918,7 +918,7 @@ namespace iohome
       bool ret = false;
       UBaseType_t currentPriority = uxTaskPriorityGet(NULL);
       vTaskPrioritySet(NULL, IO_FRAME_PROCESSING_TASK); // change task priority to higher!
-      if (create_execute_request(request, mOwnNodeId, it->second.info.node_id, true, position, quiet) && SendAndReceive(request, response, FREQUENCY_CHANNEL_2))
+      if (create_execute_request(request, mOwnNodeId, it->second.info.node_id, it->second.info.is_low_power, position, quiet) && SendAndReceive(request, response, FREQUENCY_CHANNEL_2))
       {
         UpdateDeviceStatus(response);
         ret = true;
@@ -974,7 +974,7 @@ namespace iohome
       bool ret = false;
       UBaseType_t currentPriority = uxTaskPriorityGet(NULL);
       vTaskPrioritySet(NULL, IO_FRAME_PROCESSING_TASK); // change task priority to higher!
-      if (create_execute_tilt_request(request, mOwnNodeId, it->second.info.node_id, true, tilt) && SendAndReceive(request, response, FREQUENCY_CHANNEL_2))
+      if (create_execute_tilt_request(request, mOwnNodeId, it->second.info.node_id, it->second.info.is_low_power, tilt) && SendAndReceive(request, response, FREQUENCY_CHANNEL_2))
       {
         UpdateDeviceStatus(response);
         ret = true;
@@ -1239,7 +1239,7 @@ namespace iohome
       bool ret = false;
       UBaseType_t currentPriority = uxTaskPriorityGet(NULL);
       vTaskPrioritySet(NULL, IO_FRAME_PROCESSING_TASK); // change task priority to higher!
-      if (create_set_config1_command(request, mOwnNodeId, it->second.info.node_id) && SendAndReceive(request, response, FREQUENCY_CHANNEL_2))
+      if (create_set_config1_command(request, mOwnNodeId, it->second.info.node_id, it->second.info.is_low_power) && SendAndReceive(request, response, FREQUENCY_CHANNEL_2))
       {
         if (response.command_id == CMD_SET_CONFIG1_RESPONSE)
         {
@@ -1296,7 +1296,7 @@ namespace iohome
       bool ret = false;
       UBaseType_t currentPriority = uxTaskPriorityGet(NULL);
       vTaskPrioritySet(NULL, IO_FRAME_PROCESSING_TASK); // change task priority to higher!
-      if (create_identify_request(request, mOwnNodeId, it->second.info.node_id) && SendAndReceive(request, response, FREQUENCY_CHANNEL_2))
+      if (create_identify_request(request, mOwnNodeId, it->second.info.node_id, it->second.info.is_low_power) && SendAndReceive(request, response, FREQUENCY_CHANNEL_2))
       {
         ret = true; // command sent and response received (response may be CMD_ERROR_RESPONSE which is expected for identify)
       }
@@ -1787,22 +1787,24 @@ namespace iohome
       IoFrame response;
       bool ret = false;
       uint8_t expectedResponseID;
+      auto devIt = sDeviceMap.find(deviceID);
+      bool is_low_power = (devIt != sDeviceMap.end()) ? devIt->second.info.is_low_power : true;
       switch (requestID)
       {
       case CMD_GET_NAME:
-        ret = create_getname_request(request, mOwnNodeId, tmpDeviceId);
+        ret = create_getname_request(request, mOwnNodeId, tmpDeviceId, is_low_power);
         expectedResponseID = CMD_GET_NAME_RESPONSE;
         break;
       case CMD_GET_GENERAL_INFO1:
-        ret = create_getinfo1_request(request, mOwnNodeId, tmpDeviceId);
+        ret = create_getinfo1_request(request, mOwnNodeId, tmpDeviceId, is_low_power);
         expectedResponseID = CMD_GET_GENERAL_INFO1_RESPONSE;
         break;
       case CMD_GET_GENERAL_INFO2:
-        ret = create_getinfo2_request(request, mOwnNodeId, tmpDeviceId);
+        ret = create_getinfo2_request(request, mOwnNodeId, tmpDeviceId, is_low_power);
         expectedResponseID = CMD_GET_GENERAL_INFO2_RESPONSE;
         break;
       case CMD_GET_GENERAL_INFO3:
-        ret = create_getinfo3_request(request, mOwnNodeId, tmpDeviceId);
+        ret = create_getinfo3_request(request, mOwnNodeId, tmpDeviceId, is_low_power);
         expectedResponseID = CMD_GET_GENERAL_INFO3_RESPONSE;
         break;
       case CMD_PRIVATE:

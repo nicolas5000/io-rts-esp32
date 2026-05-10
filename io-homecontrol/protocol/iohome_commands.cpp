@@ -309,8 +309,8 @@ namespace iohome
         const IoFrame &origin_frame,
         const uint8_t *key)
     {
-        // Initialize frame for 2W mode
-        init_frame(outframe);
+        // Initialize frame for 2W mode, inheriting LOW_POWER from origin frame
+        init_frame(outframe, true, false, false, (origin_frame.ctrl_byte_1 & CTRL1_LOW_POWER) != 0);
 
         // Set source and destination
         set_destination(outframe, dest_node);

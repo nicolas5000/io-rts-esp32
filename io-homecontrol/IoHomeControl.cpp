@@ -657,7 +657,7 @@ namespace iohome
               ((esp_timer_get_time() > it->second.last_status_timestamp + STATUS_UPDATE_MAX_TIME_US) // previous update is a long time ago
                || (it->second.next_status_update_timestamp < esp_timer_get_time())))                 // or we know that we should update due to previous status received
           {
-            if (strlen(it->second.info.name) == 0) // at init
+            if (strlen(it->second.info.name) <= 1) // at init (covers "" and "?" placeholder)
             {
               DeviceGetName(it->first);
             }

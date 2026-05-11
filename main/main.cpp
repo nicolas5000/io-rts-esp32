@@ -5,6 +5,7 @@
 #include "NetworkHelpers.hpp"
 #include "IoRtsManager.hpp"
 #include "CmdLineManagement.hpp"
+#include "oled_display.h"
 
 #include "esp_log.h"
 #include "sdkconfig.h"
@@ -19,6 +20,14 @@ extern "C" void app_main(void)
     // Initialize Hardware: NVS, LittleFS, GPIO ISR, SPI bus
     esp_err_t err = Config::InitHardware();
     ESP_ERROR_CHECK(err);
+
+#if CONFIG_OLED_ENABLED
+    ESP_ERROR_CHECK(oled_init());
+    oled_print_line(0, "io-homecontrol");
+    oled_print_line(1, "--------------------");
+    oled_print_line(4, "--------------------");
+    oled_show_status("Booting...");
+#endif
 
     // Initialize network: Ethernet/Wifi + DHCP/Static IP + SNTP
     NetworkHelpers::InitNetwork();

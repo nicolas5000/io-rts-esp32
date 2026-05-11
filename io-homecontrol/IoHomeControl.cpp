@@ -7,6 +7,7 @@
 #include "IoHomeControl.hpp"
 #include "iohome_commands.hpp"
 #include "EncodingHelpers.hpp"
+#include "oled_display.h"
 #include "esp_task_wdt.h"
 #include "esp_timer.h"
 #include "freertos/task.h"
@@ -279,6 +280,11 @@ namespace iohome
           IO_LOGI("Rcvd ({:.2f}) command {:02X} from {} to {} CTRL0 {:02X} CTRL1 {:02X} - {} bytes: {}",
                   rxFrame.frequency / 1000000.0, rxFrame.frame.command_id, buffToHexString(NODE_ID_SIZE, rxFrame.frame.src_node), buffToHexString(NODE_ID_SIZE, rxFrame.frame.dest_node),
                   rxFrame.frame.ctrl_byte_0, rxFrame.frame.ctrl_byte_1, rxFrame.frame.data_len, buffToHexString(rxFrame.frame.data_len, rxFrame.frame.data));
+          {
+            char cmd_hex[3];
+            snprintf(cmd_hex, sizeof(cmd_hex), "%02X", rxFrame.frame.command_id);
+            oled_show_rx(buffToHexString(NODE_ID_SIZE, rxFrame.frame.src_node).c_str(), cmd_hex, -1, (int)item.rssi);
+          }
           if (!xQueueSendToBack(sRxIoQueue, &rxFrame, 0))
           {
             IO_LOGE("process_radio_task can't add received frame to IO queue!");
@@ -309,6 +315,11 @@ namespace iohome
           IO_LOGI("Send ({:.2f}) command {:02X} from {} to {} CTRL0 {:02X} CTRL1 {:02X} - {} bytes: {}",
                   item.frequency / 1000000.0, item.frame.command_id, buffToHexString(NODE_ID_SIZE, item.frame.src_node), buffToHexString(NODE_ID_SIZE, item.frame.dest_node),
                   item.frame.ctrl_byte_0, item.frame.ctrl_byte_1, item.frame.data_len, buffToHexString(item.frame.data_len, item.frame.data));
+          {
+            char cmd_hex[5];
+            snprintf(cmd_hex, sizeof(cmd_hex), "0x%02X", item.frame.command_id);
+            oled_show_tx(cmd_hex, buffToHexString(NODE_ID_SIZE, item.frame.dest_node).c_str());
+          }
           // Process frame to send
           uint16_t preamble = item.preamble;
           // Transmit

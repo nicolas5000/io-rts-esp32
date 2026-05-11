@@ -385,4 +385,43 @@ menu "IO RTS Project Configuration"
 
     endmenu
 
+    menu "OLED Display Configuration"
+
+        config OLED_ENABLED
+            bool "Enable OLED display"
+            default y
+
+        config OLED_SDA_GPIO
+            int "I2C SDA GPIO"
+            default 4
+            depends on OLED_ENABLED
+            help
+                Heltec V2 (ESP32): 4 — Heltec V3 (ESP32-S3): 17
+
+        config OLED_SCL_GPIO
+            int "I2C SCL GPIO"
+            default 15
+            depends on OLED_ENABLED
+            help
+                Heltec V2 (ESP32): 15 — Heltec V3 (ESP32-S3): 18
+
+        config OLED_RST_GPIO
+            int "RST GPIO (-1 to disable reset)"
+            default 16
+            depends on OLED_ENABLED
+            help
+                Heltec V2 (ESP32): 16 — Heltec V3 (ESP32-S3): 21 — set -1 if not wired
+
+        config OLED_I2C_ADDR
+            hex "I2C address"
+            default 0x3C
+            depends on OLED_ENABLED
+
+        config OLED_I2C_FREQ_HZ
+            int "I2C frequency Hz"
+            default 400000
+            depends on OLED_ENABLED
+
+    endmenu
+
 endmenu

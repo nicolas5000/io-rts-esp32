@@ -22,6 +22,7 @@ namespace iohome
         DeviceType device_type;              // Device type
         uint8_t device_subtype;              // Device sub-type
         bool is_openclose_inverted;          // Device OPEN/CLOSE is inverted (0 for CLOSED, 100 for OPEN)
+        bool is_low_power;                   // Device is battery/solar powered (requires LOW_POWER flag in frames)
     };
 
     struct IoDevice

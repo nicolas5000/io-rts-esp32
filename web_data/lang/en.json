@@ -84,5 +84,5 @@
   "help.device": "Devices are discovered automatically when they respond to a status poll.\nUse the edit button to rename a device.\nOpen / Stop / Close controls the actuator directly.",
   "help.remote": "Step 1: Remotes -> (+)\nCreate a new remote entry.\nStep 2: Enter the remote ID (visible in the log when a button is pressed).\nStep 3: Click Edit and link the remote to a device.",
 
-  "footer.rights": "© nicolas5000 2025 - 2026 | djbenbe & rspaargaren. All Rights Reserved."
+  "footer.rights": "© 2025 - 2026 | nicolas5000, djbenbe & rspaargaren. All Rights Reserved."
 }

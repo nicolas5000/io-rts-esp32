@@ -10,7 +10,6 @@ extern "C" {
 #if CONFIG_OLED_ENABLED
 
 esp_err_t oled_init(void);
-void      oled_print_line(uint8_t row, const char *text);
 
 /* Screen layout (rows 0-7):
  *  0  "io-homecontrol"       title
@@ -30,7 +29,6 @@ void oled_show_status(const char *msg);
 #else
 
 static inline esp_err_t oled_init(void)                           { return ESP_OK; }
-static inline void      oled_print_line(uint8_t r, const char *t) { (void)r; (void)t; }
 static inline void      oled_show_tx(const char *n, const char *d)            { (void)n; (void)d; }
 static inline void      oled_show_rx(const char *d, const char *c, int p, int r) { (void)d; (void)c; (void)p; (void)r; }
 static inline void      oled_show_status(const char *m)                       { (void)m; }

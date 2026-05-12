@@ -8,7 +8,10 @@
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/queue.h"
+#include "freertos/timers.h"
 #include <string.h>
+#include <stdio.h>
 
 static const char *TAG = "oled";
 
@@ -142,6 +145,33 @@ static const uint8_t font6x8[96][OLED_CHAR_W] = {
     {0xFF,0xFF,0xFF,0xFF,0xFF,0x00}, /* 0x7F DEL */
 };
 
+/* ---- Queue / task types (internal) ---- */
+
+#define OLED_QUEUE_DEPTH 8
+
+typedef enum { OLED_EVT_TX, OLED_EVT_RX, OLED_EVT_STATUS } oled_evt_type_t;
+
+typedef struct {
+    oled_evt_type_t type;
+    char device_id[7];
+    char cmd_str[22];
+    int  position_pct;
+    int  rssi;
+} oled_evt_t;
+
+static StaticQueue_t  s_queue_buf;
+static uint8_t        s_queue_storage[OLED_QUEUE_DEPTH * sizeof(oled_evt_t)];
+static QueueHandle_t  s_queue;
+
+static StaticTask_t   s_task_buf;
+static StackType_t    s_task_stack[2048];
+
+static StaticTimer_t  s_timer_buf;
+static TimerHandle_t  s_timer;
+static int            s_last_rssi = 0;
+
+/* ---- Low-level I2C helpers (called only from oled_task or init) ---- */
+
 static esp_err_t send_cmd(uint8_t cmd)
 {
     uint8_t buf[2] = {0x00, cmd};
@@ -155,6 +185,75 @@ static esp_err_t send_data(const uint8_t *data, size_t len)
     memcpy(buf + 1, data, len);
     return i2c_master_transmit(s_dev, buf, len + 1, pdMS_TO_TICKS(50));
 }
+
+static void oled_print_line(uint8_t row, const char *text)
+{
+    if (row >= OLED_PAGES || s_dev == NULL) return;
+
+    uint8_t line[OLED_COLS];
+    memset(line, 0, sizeof(line));
+    if (text) {
+        for (size_t i = 0; i < MAX_CHARS && text[i]; i++) {
+            uint8_t c = (uint8_t)text[i];
+            if (c < 0x20 || c > 0x7F) c = 0x20;
+            memcpy(&line[i * OLED_CHAR_W], font6x8[c - 0x20], OLED_CHAR_W);
+        }
+    }
+    send_cmd(0xB0 | row);
+    send_cmd(0x00);
+    send_cmd(0x10);
+    send_data(line, OLED_COLS);
+}
+
+/* ---- Timer callback: restore RSSI line after status message ---- */
+
+static void status_clear_cb(TimerHandle_t xTimer)
+{
+    (void)xTimer;
+    oled_evt_t evt = { .type = OLED_EVT_STATUS, .position_pct = -1, .rssi = 0 };
+    if (s_last_rssi != 0)
+        snprintf(evt.cmd_str, sizeof(evt.cmd_str), "  RSSI:%ddBm", s_last_rssi);
+    else
+        evt.cmd_str[0] = '\0';
+    xQueueSend(s_queue, &evt, 0);
+}
+
+/* ---- OLED task: sole owner of I2C after init ---- */
+
+static void oled_task(void *arg)
+{
+    oled_evt_t evt;
+    char buf[22];
+    for (;;) {
+        if (!xQueueReceive(s_queue, &evt, portMAX_DELAY)) continue;
+        switch (evt.type) {
+        case OLED_EVT_TX:
+            snprintf(buf, sizeof(buf), "TX > %.6s", evt.device_id);
+            oled_print_line(2, buf);
+            snprintf(buf, sizeof(buf), "  %.18s", evt.cmd_str);
+            oled_print_line(3, buf);
+            break;
+        case OLED_EVT_RX:
+            s_last_rssi = evt.rssi;
+            snprintf(buf, sizeof(buf), "RX < %.6s", evt.device_id);
+            oled_print_line(5, buf);
+            if (evt.position_pct >= 0)
+                snprintf(buf, sizeof(buf), "  %.2s  POS:%d%%", evt.cmd_str, evt.position_pct);
+            else
+                snprintf(buf, sizeof(buf), "  %.2s", evt.cmd_str);
+            oled_print_line(6, buf);
+            snprintf(buf, sizeof(buf), "  RSSI:%ddBm", evt.rssi);
+            oled_print_line(7, buf);
+            break;
+        case OLED_EVT_STATUS:
+            snprintf(buf, sizeof(buf), "%.21s", evt.cmd_str);
+            oled_print_line(7, buf);
+            break;
+        }
+    }
+}
+
+/* ---- Public API ---- */
 
 esp_err_t oled_init(void)
 {
@@ -205,68 +304,50 @@ esp_err_t oled_init(void)
         }
     }
 
-    /* Clear all pages — SSD1306 RAM is undefined on power-on */
+    /* Clear display then draw static layout — done before task starts */
     for (uint8_t p = 0; p < OLED_PAGES; p++)
         oled_print_line(p, NULL);
+    oled_print_line(0, "io-homecontrol");
+    oled_print_line(1, "--------------------");
+    oled_print_line(4, "--------------------");
+
+    /* Create queue and task — all I2C access goes through the task from here */
+    s_queue = xQueueCreateStatic(OLED_QUEUE_DEPTH, sizeof(oled_evt_t),
+                                 s_queue_storage, &s_queue_buf);
+    xTaskCreateStatic(oled_task, "oled_task", 2048, NULL,
+                      tskIDLE_PRIORITY + 1, s_task_stack, &s_task_buf);
+
+    /* One-shot 4s timer to restore RSSI line after a status message */
+    s_timer = xTimerCreateStatic("oled_clr", pdMS_TO_TICKS(4000),
+                                 pdFALSE, NULL, status_clear_cb, &s_timer_buf);
 
     ESP_LOGI(TAG, "display init OK");
     return ESP_OK;
 }
 
-void oled_print_line(uint8_t row, const char *text)
-{
-    if (row >= OLED_PAGES || s_dev == NULL) return;
-
-    /* Build a full 128-pixel row buffer (blank, then fill with characters) */
-    uint8_t line[OLED_COLS];
-    memset(line, 0, sizeof(line));
-
-    if (text) {
-        for (size_t i = 0; i < MAX_CHARS && text[i]; i++) {
-            uint8_t c = (uint8_t)text[i];
-            if (c < 0x20 || c > 0x7F) c = 0x20;
-            memcpy(&line[i * OLED_CHAR_W], font6x8[c - 0x20], OLED_CHAR_W);
-        }
-    }
-
-    /* Set page address, column 0, then write the row */
-    send_cmd(0xB0 | row);
-    send_cmd(0x00);
-    send_cmd(0x10);
-    send_data(line, OLED_COLS);
-}
-
 void oled_show_tx(const char *cmd_name, const char *device_id)
 {
-    char buf[22];
-    snprintf(buf, sizeof(buf), "TX > %.6s", device_id ? device_id : "??????");
-    oled_print_line(2, buf);
-    snprintf(buf, sizeof(buf), "  %.18s", cmd_name ? cmd_name : "");
-    oled_print_line(3, buf);
+    oled_evt_t evt = { .type = OLED_EVT_TX, .position_pct = -1, .rssi = 0 };
+    snprintf(evt.device_id, sizeof(evt.device_id), "%.6s", device_id ? device_id : "??????");
+    snprintf(evt.cmd_str,   sizeof(evt.cmd_str),   "%.21s", cmd_name  ? cmd_name  : "");
+    xQueueSend(s_queue, &evt, 0);
 }
 
 void oled_show_rx(const char *device_id, const char *cmd_hex,
                   int position_pct, int rssi)
 {
-    char buf[22];
-    snprintf(buf, sizeof(buf), "RX < %.6s", device_id ? device_id : "??????");
-    oled_print_line(5, buf);
-
-    if (position_pct >= 0)
-        snprintf(buf, sizeof(buf), "  %.2s  POS:%d%%", cmd_hex ? cmd_hex : "??", position_pct);
-    else
-        snprintf(buf, sizeof(buf), "  %.2s", cmd_hex ? cmd_hex : "??");
-    oled_print_line(6, buf);
-
-    snprintf(buf, sizeof(buf), "  RSSI:%ddBm", rssi);
-    oled_print_line(7, buf);
+    oled_evt_t evt = { .type = OLED_EVT_RX, .position_pct = position_pct, .rssi = rssi };
+    snprintf(evt.device_id, sizeof(evt.device_id), "%.6s", device_id ? device_id : "??????");
+    snprintf(evt.cmd_str,   sizeof(evt.cmd_str),   "%.2s",  cmd_hex   ? cmd_hex   : "??");
+    xQueueSend(s_queue, &evt, 0);
 }
 
 void oled_show_status(const char *msg)
 {
-    char buf[22];
-    snprintf(buf, sizeof(buf), "%.21s", msg ? msg : "");
-    oled_print_line(7, buf);
+    oled_evt_t evt = { .type = OLED_EVT_STATUS, .position_pct = -1, .rssi = 0 };
+    snprintf(evt.cmd_str, sizeof(evt.cmd_str), "%.21s", msg ? msg : "");
+    xQueueSend(s_queue, &evt, 0);
+    xTimerReset(s_timer, 0);
 }
 
 #endif /* CONFIG_OLED_ENABLED */

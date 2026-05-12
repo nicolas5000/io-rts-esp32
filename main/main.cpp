@@ -23,9 +23,6 @@ extern "C" void app_main(void)
 
 #if CONFIG_OLED_ENABLED
     ESP_ERROR_CHECK(oled_init());
-    oled_print_line(0, "io-homecontrol");
-    oled_print_line(1, "--------------------");
-    oled_print_line(4, "--------------------");
     oled_show_status("Booting...");
 #endif
 
@@ -38,6 +35,10 @@ extern "C" void app_main(void)
 
     // Initialize commands line tools
     init_cmdline(&ioRtsManager);
+
+#if CONFIG_OLED_ENABLED
+    oled_show_status("Ready");
+#endif
 
     while (true)
         vTaskDelay(pdMS_TO_TICKS(60000));

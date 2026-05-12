@@ -5,4 +5,4 @@ idf_component_register(SRCS "main.cpp" "IoRtsManager.cpp" "../io-homecontrol/IoH
                         "../config/NetworkConfig.cpp" "../config/HardwareConfig.cpp" "../config/MqttConfig.cpp" "../config/IoHomeConfig.cpp"
                         "../helpers/CmdLineManagement.cpp" "../helpers/CmdLineIoTools.cpp" "../helpers/CmdLineMqttTools.cpp" "../helpers/CmdLineNetworkTools.cpp"
                     INCLUDE_DIRS "." "../helpers" "../io-homecontrol" "../io-homecontrol/protocol" "../io-homecontrol/radio" "../config"
-                    REQUIRES esp_timer esp_driver_spi esp_driver_gpio console esp_driver_uart mbedtls nvs_flash esp_wifi esp_eth mqtt esp_app_format littlefs oled_display)
+                    REQUIRES esp_timer esp_driver_spi esp_driver_gpio console esp_driver_uart mbedtls nvs_flash esp_wifi esp_eth esp_netif mqtt esp_app_format littlefs oled_display)

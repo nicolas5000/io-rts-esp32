@@ -86,3 +86,8 @@ Desktop.ini
 # AI
 .opencode
 AGENTS.md
+.claude/
+CLAUDE_*.md
+
+# Tools
+tools/console_probe.py

@@ -17,9 +17,9 @@
 #include "iohome_device.hpp"
 #include "MqttConfig.hpp"
 
-static const char *TAG = "web_server";
-
 #if CONFIG_WEB_ENABLED
+
+static const char *TAG = "web_server";
 
 #define WEB_BASE_PATH   "/web"
 #define FILE_BUF_SIZE   4096

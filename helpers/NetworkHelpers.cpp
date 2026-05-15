@@ -18,6 +18,7 @@
 
 #include "esp_log.h"
 #include "esp_sntp.h"
+#include "mdns.h"
 #include <netdb.h>
 
 static const char *TAG = "helpers";
@@ -83,6 +84,18 @@ namespace Helpers
         }
     }
 
+    static void start_mdns()
+    {
+        std::string hostname = NetworkConfig::GetHostname();
+        if (mdns_init() != ESP_OK) {
+            ESP_LOGE(TAG, "mDNS init failed");
+            return;
+        }
+        mdns_hostname_set(hostname.c_str());
+        mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
+        ESP_LOGI(TAG, "mDNS started: %s.local", hostname.c_str());
+    }
+
     /// @brief Set SNTP configuration to network interface from configuration storage
     static void set_sntp_from_configuration()
     {
@@ -124,8 +137,8 @@ namespace Helpers
         {
             ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
             ESP_LOGI(TAG, "got ip:" IPSTR, IP2STR(&event->ip_info.ip));
-            // configure SNTP
             set_sntp_from_configuration();
+            start_mdns();
             sIsConnected = true;
         }
     }
@@ -215,8 +228,8 @@ namespace Helpers
         {
             ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
             ESP_LOGI(TAG, "got ip:" IPSTR, IP2STR(&event->ip_info.ip));
-            // configure SNTP
             set_sntp_from_configuration();
+            start_mdns();
             sIsConnected = true;
         }
     }

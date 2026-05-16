@@ -344,10 +344,12 @@ header h1 {
 .inline-confirm .warning { color:#b00020; font-weight:600; display:block; margin-bottom:6px; }
 .btn.danger { background:#d9534f; color:#fff; }
 .btn.ghost  { background:#eee; }
-@media (min-width: 1280px) {
+@media (min-width: 768px) {
     main > div, .card-popup {
         grid-template-columns: repeat(2, 1fr);
     }
+}
+@media (min-width: 1280px) {
     header h1 {
       display: block;
     }

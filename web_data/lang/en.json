@@ -18,8 +18,7 @@
 
   "filter.all": "All",
   "filter.info": "Info",
-  "filter.warning": "Warning",
-  "filter.error": "Error",
+  "filter.off": "Off",
 
   "label.select_device": "Select Device:",
   "label.user": "User:",

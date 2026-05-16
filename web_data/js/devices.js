@@ -3,7 +3,7 @@
         const payload = { deviceId: deviceId, action: action };
         if (value !== undefined) payload.value = value;
         const result = await window.MiOpenApi.postJson("/api/action", payload);
-        app.logStatus(result.message || ("Action " + action + " sent."));
+        app.logStatus(result.message || ("Action " + action + " sent."), "debug");
     }
 
     function updateDeviceFill(deviceId, percent) {
@@ -23,17 +23,15 @@
 
     async function fetchAndDisplayDevices(app) {
         const deviceList = app.elements.deviceList;
-        const deviceSelect = app.elements.commandDeviceSelect;
 
         try {
             const devices = await window.MiOpenApi.requestJson("/api/devices");
             app.state.devicesCache = devices;
 
             deviceList.textContent = "";
-            deviceSelect.textContent = "";
 
             if (devices.length === 0) {
-                app.logStatus("No devices found.");
+                app.logStatus("No devices found.", "info");
                 const listItem = document.createElement("li");
                 listItem.textContent = "No devices available.";
                 deviceList.appendChild(listItem);
@@ -55,13 +53,13 @@
                 listItem.appendChild(typeBadge);
 
                 listItem.appendChild(createDeviceButton("↑", "open", function () {
-                    runAction(app, device.id, "open").catch(function (e) { app.logStatus(e.message, true); });
+                    runAction(app, device.id, "open").catch(function (e) { app.logStatus(e.message, "error"); });
                 }));
                 listItem.appendChild(createDeviceButton("■", "stop", function () {
-                    runAction(app, device.id, "stop").catch(function (e) { app.logStatus(e.message, true); });
+                    runAction(app, device.id, "stop").catch(function (e) { app.logStatus(e.message, "error"); });
                 }));
                 listItem.appendChild(createDeviceButton("↓", "down", function () {
-                    runAction(app, device.id, "close").catch(function (e) { app.logStatus(e.message, true); });
+                    runAction(app, device.id, "close").catch(function (e) { app.logStatus(e.message, "error"); });
                 }));
 
                 listItem.appendChild(createDeviceButton(
@@ -73,7 +71,7 @@
                             const fd = fresh.find(function (d) { return d.id === device.id; });
                             if (fd) device = fd;
                         } catch (e) {
-                            app.logStatus("Error refreshing: " + e.message, true);
+                            app.logStatus("Error refreshing: " + e.message, "error");
                         }
 
                         app.openPopup(
@@ -100,10 +98,10 @@
                                             action: "rename",
                                             value: newName.trim()
                                         });
-                                        app.logStatus(result.message || "Device renamed.");
+                                        app.logStatus(result.message || "Device renamed.", "debug");
                                         await fetchAndDisplayDevices(app);
                                     } catch (e) {
-                                        app.logStatus("Error renaming: " + e.message, true);
+                                        app.logStatus("Error renaming: " + e.message, "error");
                                     }
                                 }
                             }
@@ -120,37 +118,14 @@
                 deviceSelect.appendChild(option);
             });
 
-            app.logStatus("Device list updated.");
+            app.logStatus("Device list updated.", "info");
         } catch (error) {
-            app.logStatus("Error fetching devices: " + error.message, true);
-        }
-    }
-
-    async function sendCommand(app) {
-        const selectedDeviceId = app.elements.commandDeviceSelect.value;
-        const commandStr = app.elements.commandInput.value.trim();
-        if (!selectedDeviceId) { app.logStatus("Please select a device.", true); return; }
-        if (!commandStr) { app.logStatus("Please enter a command.", true); return; }
-
-        app.logStatus('Sending "' + commandStr + '" to ' + selectedDeviceId + "...");
-        try {
-            const parts = commandStr.split(" ");
-            const action = parts[0];
-            const value = parts[1] !== undefined ? Number(parts[1]) : undefined;
-            const result = await window.MiOpenApi.postJson("/api/action", {
-                deviceId: selectedDeviceId,
-                action: action,
-                value: value
-            });
-            app.logStatus(result.success ? ("OK: " + (result.message || "Done.")) : ("Failed: " + (result.message || "?")), !result.success);
-        } catch (error) {
-            app.logStatus("Error: " + error.message, true);
+            app.logStatus("Error fetching devices: " + error.message, "error");
         }
     }
 
     function init(app) {
         app.fetchAndDisplayDevices = function () { return fetchAndDisplayDevices(app); };
-        app.sendCommand = function () { return sendCommand(app); };
         app.updateDeviceFill = updateDeviceFill;
     }
 

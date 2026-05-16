@@ -21,21 +21,21 @@
                 port: app.elements.mqttPortInput.value,
                 discovery: app.elements.mqttDiscoveryInput.value
             });
-            app.logStatus(result.message || "MQTT settings updated.");
+            app.logStatus(result.message || "MQTT settings updated.", "debug");
         } catch (error) {
-            app.logStatus("Error updating MQTT config", true);
+            app.logStatus("Error updating MQTT config", "error");
         }
     }
 
     async function uploadSelectedFile(app, input, url, missingMessage, successMessage, refreshFn) {
         const file = input.files[0];
-        if (!file) { app.logStatus(missingMessage, true); return; }
+        if (!file) { app.logStatus(missingMessage, "error"); return; }
         try {
             const result = await window.MiOpenApi.uploadFile(url, file);
-            app.logStatus(result.message || successMessage);
+            app.logStatus(result.message || successMessage, "debug");
             if (refreshFn) await refreshFn();
         } catch (error) {
-            app.logStatus(error.message || successMessage, true);
+            app.logStatus(error.message || successMessage, "error");
         }
     }
 

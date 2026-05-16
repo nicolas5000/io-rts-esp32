@@ -58,7 +58,7 @@
             });
             tbody.appendChild(fragment);
         } catch (error) {
-            app.logStatus("Error fetching remotes: " + error.message, true);
+            app.logStatus("Error fetching remotes: " + error.message, "error");
         }
     }
 
@@ -87,9 +87,9 @@
                             remoteId: remoteId,
                             deviceId: deviceId
                         });
-                        app.logStatus(result.message || "Remote linked.");
+                        app.logStatus(result.message || "Remote linked.", "debug");
                         await fetchAndDisplayRemotes(app);
-                    } catch (e) { app.logStatus("Error linking: " + e.message, true); }
+                    } catch (e) { app.logStatus("Error linking: " + e.message, "error"); }
                 },
                 onUnpair: async function (deviceId) {
                     try {
@@ -98,9 +98,9 @@
                             remoteId: remoteId,
                             deviceId: deviceId
                         });
-                        app.logStatus(result.message || "Remote unlinked.");
+                        app.logStatus(result.message || "Remote unlinked.", "debug");
                         await fetchAndDisplayRemotes(app);
-                    } catch (e) { app.logStatus("Error unlinking: " + e.message, true); }
+                    } catch (e) { app.logStatus("Error unlinking: " + e.message, "error"); }
                 },
                 onDelete: async function () {
                     try {
@@ -108,9 +108,9 @@
                             action: "deleteRemote",
                             remoteId: remoteId
                         });
-                        app.logStatus(result.message || "Remote removed.");
+                        app.logStatus(result.message || "Remote removed.", "debug");
                         await fetchAndDisplayRemotes(app);
-                    } catch (e) { app.logStatus("Error removing remote: " + e.message, true); }
+                    } catch (e) { app.logStatus("Error removing remote: " + e.message, "error"); }
                 }
             }
         );
@@ -131,17 +131,17 @@
                 timingLabel: app.i18nText("popup.remote_name_label", "Remote Name:"),
                 onSave: async function (addr, newName) {
                     const id = addr.trim().toUpperCase();
-                    if (!id) { app.logStatus("Please provide a remote ID.", true); return; }
-                    if (!newName || !newName.trim()) { app.logStatus("Please provide a remote name.", true); return; }
+                    if (!id) { app.logStatus("Please provide a remote ID.", "error"); return; }
+                    if (!newName || !newName.trim()) { app.logStatus("Please provide a remote name.", "error"); return; }
                     try {
                         const result = await window.MiOpenApi.postJson("/api/action", {
                             action: "addRemote",
                             remoteId: id,
                             remoteName: newName.trim()
                         });
-                        app.logStatus(result.message || "Remote added.");
+                        app.logStatus(result.message || "Remote added.", "debug");
                         await fetchAndDisplayRemotes(app);
-                    } catch (e) { app.logStatus("Error adding remote: " + e.message, true); }
+                    } catch (e) { app.logStatus("Error adding remote: " + e.message, "error"); }
                 }
             }
         );

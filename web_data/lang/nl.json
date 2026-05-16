@@ -22,8 +22,7 @@
 
   "filter.all": "Alles",
   "filter.info": "Info",
-  "filter.warning": "Waarschuwing",
-  "filter.error": "Fout",
+  "filter.off": "Uit",
 
   "label.select_device": "Selecteer scherm:",
   "label.last_address": "Laatste adres:",

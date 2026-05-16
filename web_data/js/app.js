@@ -63,8 +63,6 @@
 
     function createElements() {
         return {
-            commandDeviceSelect: document.querySelector("#help-page #device-select"),
-            commandInput: document.getElementById("command-input"),
             deviceList: document.getElementById("device-list"),
             devicesFileInput: document.getElementById("devices-file"),
             devicesUploadButton: document.getElementById("upload-devices"),
@@ -72,6 +70,7 @@
             downloadRemotesButton: document.getElementById("download-remotes"),
             helpDeviceButton: document.getElementById("help-device"),
             helpRemoteButton: document.getElementById("help-remote"),
+            logFilter: document.getElementById("select-log"),
             mqttDiscoveryInput: document.getElementById("mqtt-discovery"),
             mqttPasswordInput: document.getElementById("mqtt-password"),
             mqttPortInput: document.getElementById("mqtt-port"),
@@ -81,9 +80,7 @@
             remotePopupButton: document.getElementById("remote-popup"),
             remotesFileInput: document.getElementById("remotes-file"),
             remotesUploadButton: document.getElementById("upload-remotes"),
-            sendCommandButton: document.getElementById("send-command-button"),
             statusMessages: document.getElementById("status-messages"),
-            suggestions: document.getElementById("suggestions"),
             themeToggle: document.getElementById("toggle-theme")
         };
     }
@@ -98,36 +95,49 @@
         return fallback || key;
     }
 
-    function logStatus(app, message, isError) {
+    function logLevelVisible(entryLevel, filter) {
+        if (filter === "off") return false;
+        if (filter === "info") return entryLevel === "info" || entryLevel === "error";
+        return true; // "all"
+    }
+
+    function applyLogFilter(app) {
+        const filter = app.state.logFilter;
+        const hidden = filter === "off";
+        app.elements.statusMessages.style.display = hidden ? "none" : "";
+        if (!hidden) {
+            Array.from(app.elements.statusMessages.children).forEach(function (el) {
+                el.style.display = logLevelVisible(el.dataset.level, filter) ? "" : "none";
+            });
+        }
+    }
+
+    function logStatus(app, message, level) {
+        // accept legacy boolean isError as second arg
+        if (level === true) level = "error";
+        if (!level || level === false) level = "debug";
+
+        const filter = app.state.logFilter;
+        if (filter === "off") return;
+
         const logEntry = document.createElement("p");
         logEntry.textContent = message;
-        if (isError) {
-            logEntry.style.color = "red";
-        }
+        logEntry.dataset.level = level;
+        if (level === "error") logEntry.style.color = "red";
+        logEntry.style.display = logLevelVisible(level, filter) ? "" : "none";
+
         app.elements.statusMessages.appendChild(logEntry);
         app.elements.statusMessages.scrollTop = app.elements.statusMessages.scrollHeight;
-        while (app.elements.statusMessages.children.length > 20) {
+        while (app.elements.statusMessages.children.length > 100) {
             app.elements.statusMessages.removeChild(app.elements.statusMessages.firstChild);
         }
     }
 
-    function initSuggestions(app) {
-        const suggestions = ["open", "close", "stop", "position", "tilt", "identify"];
-        app.elements.suggestions.textContent = "";
-        suggestions.forEach(function (item) {
-            const option = document.createElement("option");
-            option.value = item;
-            option.textContent = item;
-            app.elements.suggestions.appendChild(option);
-        });
-        app.elements.suggestions.addEventListener("change", function () {
-            if (!app.elements.suggestions.value) return;
-            if (app.elements.commandInput.value !== "" && !app.elements.commandInput.value.endsWith(" ")) {
-                app.elements.commandInput.value += " ";
-            }
-            app.elements.commandInput.value += app.elements.suggestions.value + " ";
-            app.elements.commandInput.focus();
-            app.elements.suggestions.selectedIndex = 0;
+    function initLogFilter(app) {
+        if (!app.elements.logFilter) return;
+        app.elements.logFilter.addEventListener("change", function () {
+            app.state.logFilter = app.elements.logFilter.value;
+            applyLogFilter(app);
         });
     }
 
@@ -176,7 +186,7 @@
             try {
                 const data = JSON.parse(event.data);
                 if (data.type === "log") {
-                    app.logStatus(data.message);
+                    app.logStatus(data.message, data.level || "info");
                 } else if (data.type === "position") {
                     app.updateDeviceFill(data.id, data.position);
                 } else if (data.type === "init") {
@@ -184,15 +194,12 @@
                 }
             } catch (e) { /* ignore malformed frames */ }
         };
-        ws.onopen = function () { app.logStatus("WebSocket connected"); };
-        ws.onclose = function () { app.logStatus("WebSocket disconnected", true); };
+        ws.onopen = function () { app.logStatus("WebSocket connected", "info"); };
+        ws.onclose = function () { app.logStatus("WebSocket disconnected", "error"); };
         app.state.ws = ws;
     }
 
     function bindEvents(app) {
-        if (app.elements.sendCommandButton) {
-            app.elements.sendCommandButton.addEventListener("click", app.sendCommand);
-        }
         if (app.elements.mqttUpdateButton) {
             app.elements.mqttUpdateButton.addEventListener("click", app.updateMqttConfig);
         }
@@ -227,11 +234,12 @@
         const app = {
             elements: createElements(),
             i18nText: i18nText,
-            logStatus: function (message, isError) {
-                logStatus(app, message, isError);
+            logStatus: function (message, level) {
+                logStatus(app, message, level);
             },
             state: {
                 devicesCache: [],
+                logFilter: "all",
                 ws: null
             }
         };
@@ -242,7 +250,7 @@
         window.MiOpenSettings.init(app);
         window.MiOpenApp = app;
 
-        initSuggestions(app);
+        initLogFilter(app);
         initTheme(app);
         initHelpButtons(app);
         initWebSocket(app);
@@ -253,8 +261,8 @@
             app.fetchAndDisplayRemotes();
         });
 
-        app.logStatus("System started");
-        app.logStatus("Loading devices...");
+        app.logStatus("System started", "info");
+        app.logStatus("Loading devices...", "debug");
         app.loadMqttConfig();
         app.fetchAndDisplayDevices();
         app.fetchAndDisplayRemotes();

@@ -116,9 +116,11 @@ static void ws_send_job_fn(void *arg)
     frame.payload = (uint8_t *)job->buf;
     frame.len     = job->len;
     esp_err_t err = httpd_ws_send_frame_async(s_server, job->fd, &frame);
-    // Log but keep fd registered so /api/debug can report the error
-    if (err != ESP_OK)
-        ESP_LOGW(TAG, "ws_send fd=%d err=%s", job->fd, esp_err_to_name(err));
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "ws_send fd=%d err=%s — removing client", job->fd, esp_err_to_name(err));
+        for (int i = 0; i < WS_MAX_CLIENTS; i++)
+            if (s_ws_fds[i] == job->fd) { s_ws_fds[i] = -1; break; }
+    }
     free(job);
 }
 

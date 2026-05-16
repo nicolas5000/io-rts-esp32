@@ -654,6 +654,7 @@ void web_server_start(void *ioRtsManager)
     config.stack_size = 8192;
     config.task_priority = tskIDLE_PRIORITY + 3; // below radio (8), IO processing (6), status updates (4)
     config.max_uri_handlers = 16;
+    config.max_open_sockets = 13; // browser opens many parallel connections for static files + WS
     config.uri_match_fn = httpd_uri_match_wildcard;
     config.enable_so_linger = false;
 

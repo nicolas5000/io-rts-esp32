@@ -1,0 +1,43 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Build",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-ExecutionPolicy", "Bypass",
+                "-Command",
+                "& 'C:\\Espressif\\tools\\Microsoft.v6.0.1.PowerShell_profile.ps1'; idf.py build"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Flash OTA",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-ExecutionPolicy", "Bypass",
+                "-Command",
+                "if (-not $env:OTA_KEY) { throw 'OTA_KEY not set — check .vscode/ota.env' }; curl.exe -s -f -X POST -H \"X-OTA-Key: $env:OTA_KEY\" --data-binary @build/io-rts-esp32.bin http://io-rts-esp32.local/api/ota; if ($LASTEXITCODE -ne 0) { throw 'OTA flash failed (exit $LASTEXITCODE)' }"
+            ],
+            "envFile": "${workspaceFolder}/.vscode/ota.env",
+            "dependsOn": "Build",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "clear": false
+            },
+            "problemMatcher": []
+        }
+    ]
+}

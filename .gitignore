@@ -1,5 +1,8 @@
 # VSCode and extensions
-.vscode/
+.vscode/*
+!.vscode/tasks.json
+!.vscode/settings.json
+!.vscode/extensions.json
 .devcontainer/
 
 # macOS

@@ -3,12 +3,19 @@
 #include "esp_log.h"
 #include "esp_http_server.h"
 #include "esp_littlefs.h"
+#include "esp_random.h"
 #include "cJSON.h"
+#include "nvs.h"
+#include "esp_ota_ops.h"
 
 #include <stdio.h>
+#include <inttypes.h>
 #include <string.h>
 #include <stdarg.h>
 #include <sys/stat.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include <format>
 #include <list>
 
@@ -572,6 +579,143 @@ static esp_err_t api_mqtt_post(httpd_req_t *req)
     return ESP_OK;
 }
 
+// ─── OTA key management ─────────────────────────────────────────────────────
+
+#define OTA_KEY_LEN 32
+static char s_ota_key[OTA_KEY_LEN + 1] = {};
+
+static void ota_key_init(void)
+{
+    if (CONFIG_OTA_API_KEY[0] != '\0') {
+        strncpy(s_ota_key, CONFIG_OTA_API_KEY, OTA_KEY_LEN);
+        s_ota_key[OTA_KEY_LEN] = '\0';
+        ESP_LOGI(TAG, "OTA key (menuconfig): set");
+        return;
+    }
+
+    nvs_handle_t h;
+    if (nvs_open("ota", NVS_READWRITE, &h) != ESP_OK) {
+        ESP_LOGE(TAG, "OTA: failed to open NVS");
+        return;
+    }
+    size_t len = sizeof(s_ota_key);
+    esp_err_t err = nvs_get_str(h, "api_key", s_ota_key, &len);
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        uint8_t rnd[16];
+        for (int i = 0; i < 4; i++) {
+            uint32_t r = esp_random();
+            memcpy(rnd + i * 4, &r, 4);
+        }
+        for (int i = 0; i < 16; i++)
+            snprintf(s_ota_key + i * 2, 3, "%02x", rnd[i]);
+        s_ota_key[OTA_KEY_LEN] = '\0';
+        nvs_set_str(h, "api_key", s_ota_key);
+        nvs_commit(h);
+        ESP_LOGI(TAG, "OTA key (generated): %s", s_ota_key);
+    } else if (err == ESP_OK) {
+        ESP_LOGI(TAG, "OTA key (loaded): %s", s_ota_key);
+    } else {
+        ESP_LOGE(TAG, "OTA: NVS read error: %s", esp_err_to_name(err));
+    }
+    nvs_close(h);
+}
+
+static bool ota_check_key(httpd_req_t *req)
+{
+    char key_hdr[OTA_KEY_LEN + 1] = {};
+    esp_err_t err = httpd_req_get_hdr_value_str(req, "X-OTA-Key", key_hdr, sizeof(key_hdr));
+    bool ok = (err == ESP_OK) && (memcmp(key_hdr, s_ota_key, OTA_KEY_LEN) == 0);
+    if (!ok) {
+        int fd = httpd_req_to_sockfd(req);
+        struct sockaddr_in addr = {};
+        socklen_t addrlen = sizeof(addr);
+        getpeername(fd, (struct sockaddr *)&addr, &addrlen);
+        ESP_LOGW(TAG, "OTA: unauthorized attempt from %s", inet_ntoa(addr.sin_addr));
+    }
+    return ok;
+}
+
+// ─── POST /api/ota ──────────────────────────────────────────────────────────
+
+static esp_err_t api_ota_post(httpd_req_t *req)
+{
+    if (!ota_check_key(req)) {
+        httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized");
+        return ESP_OK;
+    }
+
+    if (req->content_len == 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Empty payload");
+        return ESP_OK;
+    }
+
+    const esp_partition_t *part = esp_ota_get_next_update_partition(NULL);
+    if (!part) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No OTA partition");
+        return ESP_OK;
+    }
+    ESP_LOGI(TAG, "OTA: writing to partition %s", part->label);
+
+    esp_ota_handle_t ota_handle;
+    esp_err_t err = esp_ota_begin(part, OTA_WITH_SEQUENTIAL_WRITES, &ota_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_begin failed: %s", esp_err_to_name(err));
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA begin failed");
+        return ESP_OK;
+    }
+
+    char buf[1024];
+    int total = 0;
+    int remaining = (int)req->content_len;
+    bool write_err = false;
+
+    while (remaining > 0) {
+        int to_recv = (remaining < (int)sizeof(buf)) ? remaining : (int)sizeof(buf);
+        int n = httpd_req_recv(req, buf, to_recv);
+        if (n == HTTPD_SOCK_ERR_TIMEOUT) continue;
+        if (n <= 0) {
+            ESP_LOGE(TAG, "OTA receive error at byte %d", total);
+            write_err = true;
+            break;
+        }
+        err = esp_ota_write(ota_handle, buf, n);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "esp_ota_write failed: %s", esp_err_to_name(err));
+            write_err = true;
+            break;
+        }
+        total += n;
+        remaining -= n;
+    }
+
+    if (write_err) {
+        esp_ota_abort(ota_handle);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA write failed");
+        return ESP_OK;
+    }
+
+    err = esp_ota_end(ota_handle);
+    ESP_LOGI(TAG, "esp_ota_end: %s (%d bytes written)", esp_err_to_name(err), total);
+    if (err != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA verify failed");
+        return ESP_OK;
+    }
+
+    err = esp_ota_set_boot_partition(part);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_set_boot_partition failed: %s", esp_err_to_name(err));
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA set boot failed");
+        return ESP_OK;
+    }
+
+    ESP_LOGI(TAG, "OTA: success, rebooting...");
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"status\":\"rebooting\"}");
+    vTaskDelay(pdMS_TO_TICKS(500));
+    esp_restart();
+    return ESP_OK;
+}
+
 // ─── GET /api/syslog ────────────────────────────────────────────────────────
 
 static esp_err_t api_syslog_get(httpd_req_t *req)
@@ -930,6 +1074,7 @@ void web_server_start(void *ioRtsManager)
     reg("/api/download/remotes",  HTTP_GET,  api_download_remotes);
     reg("/api/upload/devices",    HTTP_POST, api_upload_devices);
     reg("/api/upload/remotes",    HTTP_POST, api_upload_remotes);
+    reg("/api/ota",               HTTP_POST, api_ota_post);
 
     // Wildcard catch-all for static files
     reg("/*", HTTP_GET, static_file_handler);
@@ -940,8 +1085,13 @@ void web_server_start(void *ioRtsManager)
     s_orig_vprintf = esp_log_set_vprintf(web_log_vprintf);
 
     syslog_init(CONFIG_IP_LAYER_HOSTNAME);
+    ota_key_init();
 
     ESP_LOGI(TAG, "HTTP server started");
+
+    const esp_partition_t *running = esp_ota_get_running_partition();
+    ESP_LOGI(TAG, "Running partition: %s (offset 0x%08" PRIx32 ")", running->label, running->address);
+    esp_ota_mark_app_valid_cancel_rollback();
 }
 
 #endif // CONFIG_WEB_ENABLED

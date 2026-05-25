@@ -1,0 +1,13 @@
+menu "OTA Update"
+
+    config OTA_API_KEY
+        string "OTA API key (X-OTA-Key header)"
+        default ""
+        help
+            Secret key required in the X-OTA-Key HTTP header to authorize
+            firmware uploads via POST /api/ota. Set a unique value here so
+            the same key works across machines without needing serial access.
+            If left empty, a random key is generated on first boot and stored
+            in NVS — retrieve it once from the serial boot log.
+
+endmenu

@@ -152,6 +152,21 @@
                         </div>
                     </div>
                 </section>
+
+                <section id="ota-section">
+                    <div class="title">
+                        <h2>Firmware Update</h2>
+                    </div>
+                    <div class="card">
+                        <label for="ota-key">OTA Key:</label>
+                        <input type="password" id="ota-key" placeholder="OTA API key">
+                        <label for="ota-file">Firmware (.bin):</label>
+                        <input type="file" id="ota-file" accept=".bin">
+                        <button id="ota-upload">Upload Firmware</button>
+                        <progress id="ota-progress" max="100" value="0" style="width:100%; margin-top:8px;"></progress>
+                        <span id="ota-status" style="margin-top:6px; font-size:0.9em;"></span>
+                    </div>
+                </section>
             </div>
         </div>
     </main>
@@ -208,6 +223,7 @@
     <script src="js/remotes.js"></script>
     <script src="js/settings.js"></script>
     <script src="js/syslog.js"></script>
+    <script src="js/ota.js"></script>
     <script src="js/app.js"></script>
     <script>
         function showPage(page) {

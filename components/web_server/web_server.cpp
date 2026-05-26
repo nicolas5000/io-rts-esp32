@@ -1007,6 +1007,67 @@ static esp_err_t api_upload_remotes(httpd_req_t *req)
     return ESP_OK;
 }
 
+// ─── POST /api/upload/web ───────────────────────────────────────────────────
+
+static esp_err_t api_upload_web_post(httpd_req_t *req)
+{
+    if (!ota_check_key(req)) {
+        httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized");
+        return ESP_OK;
+    }
+
+    char query[256] = {};
+    char rel_path[128] = {};
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK ||
+        httpd_query_key_value(query, "path", rel_path, sizeof(rel_path)) != ESP_OK ||
+        rel_path[0] != '/') {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing or invalid ?path=");
+        return ESP_OK;
+    }
+    if (strstr(rel_path, "..")) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid path");
+        return ESP_OK;
+    }
+
+    char filepath[600];
+    if (snprintf(filepath, sizeof(filepath), "%s%s", WEB_BASE_PATH, rel_path) >= (int)sizeof(filepath)) {
+        httpd_resp_send_err(req, HTTPD_414_URI_TOO_LONG, "Path too long");
+        return ESP_OK;
+    }
+
+    FILE *f = fopen(filepath, "w");
+    if (!f) {
+        ESP_LOGE(TAG, "web upload: cannot open %s", filepath);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Cannot open file for writing");
+        return ESP_OK;
+    }
+
+    char buf[1024];
+    int remaining = (int)req->content_len;
+    int total = 0;
+    bool write_err = false;
+    while (remaining > 0) {
+        int to_recv = (remaining < (int)sizeof(buf)) ? remaining : (int)sizeof(buf);
+        int n = httpd_req_recv(req, buf, to_recv);
+        if (n == HTTPD_SOCK_ERR_TIMEOUT) continue;
+        if (n <= 0) { write_err = true; break; }
+        if (fwrite(buf, 1, n, f) != (size_t)n) { write_err = true; break; }
+        total += n;
+        remaining -= n;
+    }
+    fclose(f);
+
+    if (write_err) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Write failed");
+        return ESP_OK;
+    }
+
+    ESP_LOGI(TAG, "web upload: %d bytes -> %s", total, filepath);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"status\":\"ok\"}");
+    return ESP_OK;
+}
+
 // ─── Server startup ─────────────────────────────────────────────────────────
 
 void web_server_start(void *ioRtsManager)
@@ -1031,7 +1092,7 @@ void web_server_start(void *ioRtsManager)
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.stack_size = 8192;
     config.task_priority = tskIDLE_PRIORITY + 3; // below radio (8), IO processing (6), status updates (4)
-    config.max_uri_handlers = 16;
+    config.max_uri_handlers = 20;
     config.max_open_sockets = 13; // browser opens many parallel connections for static files + WS
     config.uri_match_fn = httpd_uri_match_wildcard;
     config.enable_so_linger = false;
@@ -1075,6 +1136,7 @@ void web_server_start(void *ioRtsManager)
     reg("/api/upload/devices",    HTTP_POST, api_upload_devices);
     reg("/api/upload/remotes",    HTTP_POST, api_upload_remotes);
     reg("/api/ota",               HTTP_POST, api_ota_post);
+    reg("/api/upload/web*",       HTTP_POST, api_upload_web_post);
 
     // Wildcard catch-all for static files
     reg("/*", HTTP_GET, static_file_handler);

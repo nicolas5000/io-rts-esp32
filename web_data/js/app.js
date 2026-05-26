@@ -87,6 +87,11 @@
             syslogFacilityInput: document.getElementById("syslog-facility"),
             syslogMinLevelInput: document.getElementById("syslog-min-level"),
             syslogUpdateButton: document.getElementById("syslog-update"),
+            otaKeyInput: document.getElementById("ota-key"),
+            otaFileInput: document.getElementById("ota-file"),
+            otaUploadButton: document.getElementById("ota-upload"),
+            otaProgress: document.getElementById("ota-progress"),
+            otaStatus: document.getElementById("ota-status"),
             themeToggle: document.getElementById("toggle-theme")
         };
     }
@@ -238,6 +243,9 @@
         if (app.elements.syslogUpdateButton) {
             app.elements.syslogUpdateButton.addEventListener("click", app.updateSyslogConfig);
         }
+        if (app.elements.otaUploadButton) {
+            app.elements.otaUploadButton.addEventListener("click", app.uploadFirmware);
+        }
     }
 
     document.addEventListener("DOMContentLoaded", function () {
@@ -261,6 +269,7 @@
         window.MiOpenRemotes.init(app);
         window.MiOpenSettings.init(app);
         window.MiOpenSyslog.init(app);
+        window.MiOpenOta.init(app);
         window.MiOpenApp = app;
 
         initLogFilter(app);

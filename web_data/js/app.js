@@ -283,6 +283,14 @@
             app.fetchAndDisplayRemotes();
         });
 
+        fetch("/api/info?" + Date.now(), { cache: "no-store" })
+            .then(function (r) { return r.json(); })
+            .then(function (d) {
+                var el = document.getElementById("firmware-version");
+                if (el) el.textContent = "Firmware " + d.version + "  •  " + d.compile_date + " " + d.compile_time + "  •  " + d.idf_ver;
+            })
+            .catch(function () {});
+
         app.logStatus("System started", "info");
         app.logStatus("Loading devices...", "debug");
         app.loadMqttConfig();

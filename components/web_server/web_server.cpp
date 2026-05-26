@@ -1007,6 +1007,21 @@ static esp_err_t api_upload_remotes(httpd_req_t *req)
     return ESP_OK;
 }
 
+// ─── GET /api/info ──────────────────────────────────────────────────────────
+
+static esp_err_t api_info_get(httpd_req_t *req)
+{
+    const esp_app_desc_t *desc = esp_app_get_description();
+    cJSON *obj = cJSON_CreateObject();
+    cJSON_AddStringToObject(obj, "version",      desc->version);
+    cJSON_AddStringToObject(obj, "project",      desc->project_name);
+    cJSON_AddStringToObject(obj, "compile_date", desc->date);
+    cJSON_AddStringToObject(obj, "compile_time", desc->time);
+    cJSON_AddStringToObject(obj, "idf_ver",      desc->idf_ver);
+    send_json(req, obj);
+    return ESP_OK;
+}
+
 // ─── POST /api/upload/web ───────────────────────────────────────────────────
 
 static esp_err_t api_upload_web_post(httpd_req_t *req)
@@ -1136,6 +1151,7 @@ void web_server_start(void *ioRtsManager)
     reg("/api/upload/devices",    HTTP_POST, api_upload_devices);
     reg("/api/upload/remotes",    HTTP_POST, api_upload_remotes);
     reg("/api/ota",               HTTP_POST, api_ota_post);
+    reg("/api/info",              HTTP_GET,  api_info_get);
     reg("/api/upload/web*",       HTTP_POST, api_upload_web_post);
 
     // Wildcard catch-all for static files

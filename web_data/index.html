@@ -159,8 +159,11 @@
                     </div>
                     <div class="card">
                         <label for="ota-key">OTA Key:</label>
-                        <input type="password" id="ota-key" placeholder="OTA API key">
-                        <label for="ota-file">Firmware (.bin):</label>
+                        <div style="display:flex;gap:6px;align-items:center;">
+                            <input type="password" id="ota-key" placeholder="OTA API key" style="flex:1;margin:0;">
+                            <button id="ota-show-key" style="white-space:nowrap;">Show key</button>
+                        </div>
+                        <label for="ota-file" style="margin-top:8px;">Firmware (.bin):</label>
                         <input type="file" id="ota-file" accept=".bin">
                         <button id="ota-upload">Upload Firmware</button>
                         <progress id="ota-progress" max="100" value="0" style="width:100%; margin-top:8px;"></progress>

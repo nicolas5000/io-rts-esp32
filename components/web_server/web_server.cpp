@@ -635,6 +635,16 @@ static bool ota_check_key(httpd_req_t *req)
     return ok;
 }
 
+// ─── GET /api/ota/key ───────────────────────────────────────────────────────
+
+static esp_err_t api_ota_key_get(httpd_req_t *req)
+{
+    cJSON *obj = cJSON_CreateObject();
+    cJSON_AddStringToObject(obj, "key", s_ota_key);
+    send_json(req, obj);
+    return ESP_OK;
+}
+
 // ─── POST /api/ota ──────────────────────────────────────────────────────────
 
 static esp_err_t api_ota_post(httpd_req_t *req)
@@ -1151,6 +1161,7 @@ void web_server_start(void *ioRtsManager)
     reg("/api/upload/devices",    HTTP_POST, api_upload_devices);
     reg("/api/upload/remotes",    HTTP_POST, api_upload_remotes);
     reg("/api/ota",               HTTP_POST, api_ota_post);
+    reg("/api/ota/key",           HTTP_GET,  api_ota_key_get);
     reg("/api/info",              HTTP_GET,  api_info_get);
     reg("/api/upload/web*",       HTTP_POST, api_upload_web_post);
 

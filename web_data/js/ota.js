@@ -91,6 +91,21 @@
         if (app.elements.otaProgress) {
             app.elements.otaProgress.style.display = "none";
         }
+        var showKeyBtn = document.getElementById("ota-show-key");
+        if (showKeyBtn) {
+            showKeyBtn.addEventListener("click", function () {
+                fetch("/api/ota/key?" + Date.now(), { cache: "no-store" })
+                    .then(function (r) { return r.json(); })
+                    .then(function (d) {
+                        if (d.key && app.elements.otaKeyInput) {
+                            app.elements.otaKeyInput.value = d.key;
+                            app.elements.otaKeyInput.type = "text";
+                            localStorage.setItem(STORAGE_KEY, d.key);
+                        }
+                    })
+                    .catch(function () { app.logStatus("Could not fetch OTA key.", "error"); });
+            });
+        }
         app.uploadFirmware = function () { uploadFirmware(app); };
     }
 

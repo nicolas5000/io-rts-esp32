@@ -344,6 +344,70 @@ header h1 {
 .inline-confirm .warning { color:#b00020; font-weight:600; display:block; margin-bottom:6px; }
 .btn.danger { background:#d9534f; color:#fff; }
 .btn.ghost  { background:#eee; }
+.type-badge {
+    font-size: 0.62em;
+    opacity: 0.75;
+    background: rgba(0,0,0,0.22);
+    border-radius: 4px;
+    padding: 1px 5px;
+    display: inline-block;
+    letter-spacing: 0.02em;
+}
+.slider-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 4px;
+    width: 100%;
+}
+.slider-label {
+    font-size: 0.7em;
+    min-width: 22px;
+    flex-shrink: 0;
+    color: #fff;
+    opacity: 0.85;
+}
+.device-slider {
+    flex: 1;
+    min-width: 0;
+    height: 4px;
+    accent-color: var(--color-accent3);
+    cursor: pointer;
+}
+ul#device-list li .btn-text {
+    margin: 1px auto;
+    padding: 6px 12px;
+    font-size: 13px;
+    width: fit-content;
+}
+ul#device-list li .btn-fav {
+    margin: 2px auto;
+    width: fit-content;
+}
+.btn-fav {
+    padding: 2px 10px;
+    font-size: 1.05em;
+    line-height: 1.5;
+    background: rgba(0,0,0,0.15);
+    color: #fff;
+    border: none;
+    border-radius: var(--radius);
+    cursor: pointer;
+}
+.btn-fav:hover { background: var(--color-accent2); }
+.btn-fav.has-favorite { color: #ffd700; }
+.device-status-only {
+    font-size: 0.8em;
+    opacity: 0.7;
+    text-align: center;
+    padding: 4px 0;
+}
+.device-btn-row {
+    display: flex;
+    justify-content: center;
+    gap: 2px;
+    flex-wrap: wrap;
+}
 @media (min-width: 768px) {
     main > div, .card-popup {
         grid-template-columns: repeat(2, 1fr);

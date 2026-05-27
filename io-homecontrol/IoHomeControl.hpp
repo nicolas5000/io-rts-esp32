@@ -24,6 +24,7 @@ namespace iohome
 
   typedef void (*LoggerCallback)(esp_log_level_t log_level, const char *tag, std::string log); // Callback to receive logs from the IO controller (if verbose)
   typedef void (*UpdatedDeviceCallback)(const std::string deviceID, const IoDevice &device);   // Callback to receive status update of devices
+  typedef void (*UnknownSenderCallback)(const std::string &senderID);                          // Callback when a frame from an unregistered sender is received
 
   /**
    * @brief io-homecontrol Node Controller
@@ -77,6 +78,10 @@ namespace iohome
     ///        instead of trusting the device to send a proactive status update (0x71).
     /// @param enable true to ignore auto-update flag and use timer, false to trust auto-update
     void SetIgnoreAutoUpdate(bool enable) { mIgnoreAutoUpdate = enable; }
+
+    /// @brief Register callback for frames from unregistered senders (useful for remote capture)
+    /// @param cb Callback function, or nullptr to unregister
+    void SetUnknownSenderCallback(UnknownSenderCallback cb);
 
     /// @brief Get ignore auto-update flag
     /// @return true if auto-update flag is ignored

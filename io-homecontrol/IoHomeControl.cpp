@@ -79,6 +79,7 @@ namespace iohome
   static std::mutex sRemoteMapMutex;                               // Mutex to protect sRemoteMap
   static LoggerCallback sLoggerCallback;                           // Callback to send logs to
   static UpdatedDeviceCallback sDeviceStatusCallback;              // Callback to send device status updates to
+  static UnknownSenderCallback sUnknownSenderCallback = nullptr;   // Callback for frames from unregistered senders
 
   struct RadioRxFrameQueueItem
   {
@@ -423,6 +424,11 @@ namespace iohome
     return true;
   }
 
+  void IoHomeControl::SetUnknownSenderCallback(UnknownSenderCallback cb)
+  {
+    sUnknownSenderCallback = cb;
+  }
+
   int16_t IoHomeControl::ConfigureRadio(uint8_t power)
   {
     if (mRadio == nullptr)
@@ -641,6 +647,10 @@ namespace iohome
                   device->second.next_status_update_timestamp = esp_timer_get_time() + STATUS_UPDATE_AFTER_REMOTE_US;
                 }
               }
+            }
+            else if (sUnknownSenderCallback != nullptr)
+            {
+              sUnknownSenderCallback(srcDevice);
             }
           }
           break;

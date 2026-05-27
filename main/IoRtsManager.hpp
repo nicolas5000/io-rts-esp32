@@ -52,6 +52,15 @@ namespace IoRts
         /// @param remoteID remote ID (6 characters as hex representation of the 3 bytes, eg "112233")
         void RemoveIoRemote(const std::string &remoteID);
 
+        /// @brief Start remote capture window — next frame from an unregistered sender triggers a broadcast
+        void StartRemoteCapture();
+
+        /// @brief Cancel an active remote capture window
+        void StopRemoteCapture();
+
+        /// @brief Returns true if a remote capture window is currently open
+        bool IsCaptureActive() const;
+
         /// @brief Retrieve current configuration about passive / active mode
         /// @return true if currently in passive mode
         bool isIoPassive() { return mIoPassive; }

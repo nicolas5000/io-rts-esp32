@@ -208,6 +208,17 @@
                     var el = document.querySelector('.device[data-id="' + data.id + '"]');
                     if (el) el.closest("li") ? el.closest("li").remove() : el.remove();
                     app.logStatus("Device removed.", "info");
+                } else if (data.type === "device_added") {
+                    if (app.pairingWizard) app.pairingWizard.onDeviceAdded(data.id, data.name || data.id);
+                    app.fetchAndDisplayDevices();
+                } else if (data.type === "pairing_active") {
+                    if (app.pairingWizard) app.pairingWizard.onPairingActive(data.remaining_s || 0);
+                } else if (data.type === "pair_failed") {
+                    if (app.pairingWizard) app.pairingWizard.onPairFailed();
+                } else if (data.type === "remote_seen") {
+                    if (app.pairingWizard) app.pairingWizard.onRemoteSeen(data.id);
+                } else if (data.type === "remote_capture_timeout") {
+                    if (app.pairingWizard) app.pairingWizard.onCaptureTimeout();
                 }
             } catch (e) { /* ignore malformed frames */ }
         };

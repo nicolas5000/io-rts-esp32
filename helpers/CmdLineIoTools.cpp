@@ -2,6 +2,7 @@
 #include "IoHomeConfig.hpp"
 
 #include <algorithm>
+#include <vector>
 #include "argtable3/argtable3.h"
 #include "esp_console.h"
 #include "esp_log.h"
@@ -117,6 +118,192 @@ void register_ioremove(void)
         .context = NULL};
 
     ESP_ERROR_CHECK(esp_console_cmd_register(&ioremove_cmd));
+}
+
+// ******************* IO DEACTIVATE ********************
+
+static struct
+{
+    struct arg_str *device_id;
+    struct arg_end *end;
+} iodeactivate_args;
+
+static int do_iodeactivate_cmd(int argc, char **argv)
+{
+    int nerrors = arg_parse(argc, argv, (void **)&iodeactivate_args);
+    if (nerrors != 0)
+    {
+        arg_print_errors(stderr, iodeactivate_args.end, argv[0]);
+        return 1;
+    }
+    std::string deviceID(iodeactivate_args.device_id->sval[0]);
+    std::transform(deviceID.begin(), deviceID.end(), deviceID.begin(), [](unsigned char c)
+                   { return std::toupper(c); });
+    sIoRtsManager->DeactivateDevice(deviceID);
+    return 0;
+}
+
+static void register_iodeactivate(void)
+{
+    iodeactivate_args.device_id = arg_str1(NULL, NULL, "<deviceid>", "ID of the device (3 bytes, eg 112233)");
+    iodeactivate_args.end = arg_end(1);
+
+    const esp_console_cmd_t cmd = {
+        .command = "io_deactivate",
+        .help = "Deactivate a device: marks it inactive, stops radio monitoring. Reversible with io_reactivate.",
+        .hint = NULL,
+        .func = &do_iodeactivate_cmd,
+        .argtable = &iodeactivate_args,
+        .func_w_context = NULL,
+        .context = NULL};
+    ESP_ERROR_CHECK(esp_console_cmd_register(&cmd));
+}
+
+// ******************* IO REACTIVATE ********************
+
+static struct
+{
+    struct arg_str *device_id;
+    struct arg_end *end;
+} ioreactivate_args;
+
+static int do_ioreactivate_cmd(int argc, char **argv)
+{
+    int nerrors = arg_parse(argc, argv, (void **)&ioreactivate_args);
+    if (nerrors != 0)
+    {
+        arg_print_errors(stderr, ioreactivate_args.end, argv[0]);
+        return 1;
+    }
+    std::string deviceID(ioreactivate_args.device_id->sval[0]);
+    std::transform(deviceID.begin(), deviceID.end(), deviceID.begin(), [](unsigned char c)
+                   { return std::toupper(c); });
+    sIoRtsManager->ReactivateDevice(deviceID);
+    return 0;
+}
+
+static void register_ioreactivate(void)
+{
+    ioreactivate_args.device_id = arg_str1(NULL, NULL, "<deviceid>", "ID of the device (3 bytes, eg 112233)");
+    ioreactivate_args.end = arg_end(1);
+
+    const esp_console_cmd_t cmd = {
+        .command = "io_reactivate",
+        .help = "Re-activate a previously deactivated device: restores radio monitoring.",
+        .hint = NULL,
+        .func = &do_ioreactivate_cmd,
+        .argtable = &ioreactivate_args,
+        .func_w_context = NULL,
+        .context = NULL};
+    ESP_ERROR_CHECK(esp_console_cmd_register(&cmd));
+}
+
+// ******************* IO DELETE ********************
+
+static struct
+{
+    struct arg_str *device_id;
+    struct arg_end *end;
+} iodelete_args;
+
+static int do_iodelete_cmd(int argc, char **argv)
+{
+    int nerrors = arg_parse(argc, argv, (void **)&iodelete_args);
+    if (nerrors != 0)
+    {
+        arg_print_errors(stderr, iodelete_args.end, argv[0]);
+        return 1;
+    }
+    std::string deviceID(iodelete_args.device_id->sval[0]);
+    std::transform(deviceID.begin(), deviceID.end(), deviceID.begin(), [](unsigned char c)
+                   { return std::toupper(c); });
+    if (!sIoRtsManager->DeleteDevice(deviceID))
+        ESP_LOGE(TAG, "io_delete failed — device must be deactivated first (use io_deactivate)");
+    return 0;
+}
+
+static void register_iodelete(void)
+{
+    iodelete_args.device_id = arg_str1(NULL, NULL, "<deviceid>", "ID of the device (3 bytes, eg 112233)");
+    iodelete_args.end = arg_end(1);
+
+    const esp_console_cmd_t cmd = {
+        .command = "io_delete",
+        .help = "Permanently delete an inactive device. Device must be deactivated first. IRREVERSIBLE.",
+        .hint = NULL,
+        .func = &do_iodelete_cmd,
+        .argtable = &iodelete_args,
+        .func_w_context = NULL,
+        .context = NULL};
+    ESP_ERROR_CHECK(esp_console_cmd_register(&cmd));
+}
+
+// ******************* IO DELETE INACTIVE ********************
+
+static struct
+{
+    struct arg_lit *confirm;
+    struct arg_end *end;
+} iodeleteinactive_args;
+
+static int do_iodeleteinactive_cmd(int argc, char **argv)
+{
+    int nerrors = arg_parse(argc, argv, (void **)&iodeleteinactive_args);
+    if (nerrors != 0)
+    {
+        arg_print_errors(stderr, iodeleteinactive_args.end, argv[0]);
+        return 1;
+    }
+
+    // Collect inactive devices under lock
+    std::vector<std::pair<std::string, std::string>> inactive; // {id, name}
+    {
+        std::lock_guard<std::mutex> guard(sIoRtsManager->mIoDevicesMutex);
+        for (const auto &[id, dev] : sIoRtsManager->mIoDevices)
+            if (dev.is_deleted)
+                inactive.push_back({id, std::string(dev.info.name)});
+    }
+
+    if (inactive.empty())
+    {
+        ESP_LOGI(TAG, "No inactive devices.");
+        return 0;
+    }
+
+    ESP_LOGI(TAG, "Inactive devices (%u):", (unsigned)inactive.size());
+    for (const auto &[id, name] : inactive)
+        ESP_LOGI(TAG, "  %s  (%s)", id.c_str(), name.c_str());
+
+    if (iodeleteinactive_args.confirm->count == 0)
+    {
+        ESP_LOGW(TAG, "Add --confirm to permanently delete all %u inactive device(s) above.", (unsigned)inactive.size());
+        return 0;
+    }
+
+    for (const auto &[id, name] : inactive)
+    {
+        if (sIoRtsManager->DeleteDevice(id))
+            ESP_LOGI(TAG, "Deleted %s (%s)", id.c_str(), name.c_str());
+        else
+            ESP_LOGE(TAG, "Failed to delete %s", id.c_str());
+    }
+    return 0;
+}
+
+static void register_iodeleteinactive(void)
+{
+    iodeleteinactive_args.confirm = arg_lit0(NULL, "confirm", "Actually delete (without this flag the command only lists inactive devices)");
+    iodeleteinactive_args.end = arg_end(1);
+
+    const esp_console_cmd_t cmd = {
+        .command = "io_delete_inactive",
+        .help = "List inactive devices. Add --confirm to permanently delete all of them. IRREVERSIBLE.",
+        .hint = NULL,
+        .func = &do_iodeleteinactive_cmd,
+        .argtable = &iodeleteinactive_args,
+        .func_w_context = NULL,
+        .context = NULL};
+    ESP_ERROR_CHECK(esp_console_cmd_register(&cmd));
 }
 
 // ******************* IO OPEN ********************
@@ -922,6 +1109,10 @@ void register_io_cmdline_tools(IoRts::IoRtsManager *io_rts_manager)
     register_iodiscover();
     register_ioadd();
     register_ioremove();
+    register_iodeactivate();
+    register_ioreactivate();
+    register_iodelete();
+    register_iodeleteinactive();
     register_ioopen();
     register_ioclose();
     register_iostop();

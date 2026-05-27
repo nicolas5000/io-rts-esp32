@@ -20,6 +20,17 @@ namespace IoRts
 {
     static IoRtsManager *sIoRtsManager; // Pointer to IoRtsManager isntance
     static MqttHelpers *sMqttHelper;    // Pointer to MQTT instance to manage MQTT communication layer
+    static volatile bool sCaptureActive = false; // true while a remote capture window is open
+
+    static void unknownSenderCallback(const std::string &senderID)
+    {
+        if (!sCaptureActive)
+            return;
+        ESP_LOGI(TAG, "Remote capture: unknown sender %s", senderID.c_str());
+#if CONFIG_WEB_ENABLED
+        web_server_broadcast_message(std::format("{{\"type\":\"remote_seen\",\"id\":\"{}\"}}", senderID).c_str());
+#endif
+    }
 
     static void loggerCallback(esp_log_level_t log_level, const char *tag, std::string log)
     {
@@ -70,6 +81,11 @@ namespace IoRts
                 Helpers::StoredIoDevice storedDevice = {};
                 storedDevice.device = device;
                 Helpers::DeviceStorage::SaveIoDevice(deviceID, storedDevice);
+                // broadcast device_added WebSocket event
+#if CONFIG_WEB_ENABLED
+                web_server_broadcast_message(
+                    std::format("{{\"type\":\"device_added\",\"id\":\"{}\",\"name\":\"{}\"}}", deviceID, device.info.name).c_str());
+#endif
             }
             else
             {
@@ -343,6 +359,23 @@ namespace IoRts
             }
         }
     }
+    void IoRtsManager::StartRemoteCapture()
+    {
+        sCaptureActive = true;
+        ESP_LOGI(TAG, "Remote capture window opened");
+    }
+
+    void IoRtsManager::StopRemoteCapture()
+    {
+        sCaptureActive = false;
+        ESP_LOGI(TAG, "Remote capture window closed");
+    }
+
+    bool IoRtsManager::IsCaptureActive() const
+    {
+        return sCaptureActive;
+    }
+
     void IoRtsManager::InitializeIo()
     {
         // Initialize IO-HOMECONTROL
@@ -358,6 +391,7 @@ namespace IoRts
                 mIoHome->SetIgnoreAutoUpdate(IoHomeConfig::isIgnoreAutoUpdateEnabled());
                 mIoHome->Begin(IoHomeConfig::GetIoNodeId(), IoHomeConfig::GetIoSystemKey(), IoHomeConfig::isPassiveModeEnabled());
                 mIoHome->ConfigureRadio(IoHomeConfig::GetTxPower());
+                mIoHome->SetUnknownSenderCallback(unknownSenderCallback);
             }
         }
     }

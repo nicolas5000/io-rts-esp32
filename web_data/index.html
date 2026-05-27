@@ -13,6 +13,7 @@
     <header>
         <img src="img/logo.png" alt="io-homecontrol Logo" class="logo">
         <h1 data-i18n="header.title">io-homecontrol</h1>
+        <div id="pairing-badge" style="display:none"></div>
         <nav>
             <a onclick="showPage('devices')" class="items" data-i18n="nav.devices">Devices</a>
             <a onclick="showPage('help')" class="items" data-i18n="nav.help">Log</a>
@@ -34,6 +35,7 @@
                     <div class="title">
                         <h2 data-i18n="section.devices">Devices</h2>
                         <div class="btn help" id="help-device"></div>
+                        <div class="btn add" id="pair-device-btn" title="Pair new device"></div>
                     </div>
                     <div class="card">
                         <ul id="device-list">
@@ -178,6 +180,19 @@
         <p data-i18n="footer.rights">© 2025 - 2026 | nicolas5000, djbenbe &amp; rspaargaren. All Rights Reserved.</p>
         <p id="firmware-version" style="font-size:0.8em; opacity:0.7; margin:0;"></p>
     </footer>
+
+    <div id="pair-wizard">
+        <div class="popup-container">
+            <div class="title">
+                <h2 id="pair-wizard-title" data-i18n="popup.pair_wizard_title">Pair Device</h2>
+                <div class="btn close" id="pair-wizard-close"></div>
+            </div>
+            <div class="card-popup" style="display:block;">
+                <p id="pair-wizard-status"></p>
+                <div id="pair-wizard-buttons" class="popup-buttons"></div>
+            </div>
+        </div>
+    </div>
 
     <div id="popup">
         <div class="popup-container">

@@ -337,6 +337,20 @@ footer {
   display: flex;
   flex-direction: column;
 }
+#pair-wizard {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    align-items: center;
+    justify-content: center;
+    z-index: 1001;
+    backdrop-filter: blur(0.7rem);
+}
+#pair-wizard.open {
+    display: flex;
+    flex-direction: column;
+}
 header h1 {
   display: none;
 }
@@ -415,6 +429,21 @@ ul#device-list li.device.inactive {
 }
 .inactive-badge {
     background: rgba(120,0,0,0.35);
+}
+@keyframes pairing-pulse {
+    0%,100% { opacity: 1; transform: scale(1); }
+    50%      { opacity: 0.55; transform: scale(0.92); }
+}
+#pairing-badge {
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 3px 9px;
+    border-radius: 12px;
+    background: var(--color-primary, #e67e22);
+    color: #fff;
+    white-space: nowrap;
+    animation: pairing-pulse 1.4s ease-in-out infinite;
+    cursor: pointer;
 }
 @media (min-width: 768px) {
     main > div, .card-popup {

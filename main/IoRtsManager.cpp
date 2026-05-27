@@ -11,6 +11,7 @@
 static const char *TAG = "ioRtsMan";
 
 #include <format>
+#include <vector>
 
 using namespace Helpers;
 using namespace Config;
@@ -161,54 +162,151 @@ namespace IoRts
     }
     void IoRtsManager::RemoveIoDevice(const std::string &deviceID)
     {
-        sIoRtsManager->mIoDevicesMutex.lock(); // Take mutex
-        auto it = mIoDevices.find(deviceID);
-        if (it != mIoDevices.end())
-        {
-            if (it->second.is_deleted)
-            {
-                sIoRtsManager->mIoDevicesMutex.unlock(); // release mutex
-                return;
-            }
-            // Remove from Io controller
-            if (mIoHome != nullptr)
-                mIoHome->DeleteDevice(deviceID);
-            // Update mIODevices
-            it->second.is_deleted = true;
-            // Remove from storage
-            Helpers::DeviceStorage::RemoveIoDevice(deviceID);
-            sIoRtsManager->mIoDevicesMutex.unlock(); // release mutex as MQTT needs it!
-            if (sMqttHelper != nullptr)
-            {
-                // send MQTT discovery message
-                sMqttHelper->SendDiscovery();
-                // delete retained topics
-                sMqttHelper->SendIoDeviceStatus(deviceID);
-            }
-        }
-        else
-        {
-            sIoRtsManager->mIoDevicesMutex.unlock(); // release mutex
-            ESP_LOGE(TAG, "RemoveIoDevice: unknown %s", deviceID.c_str());
-        }
+        // Legacy method — delegates to DeactivateDevice
+        DeactivateDevice(deviceID);
     }
+    void IoRtsManager::DeactivateDevice(const std::string &deviceID)
+    {
+        mIoDevicesMutex.lock();
+        auto it = mIoDevices.find(deviceID);
+        if (it == mIoDevices.end())
+        {
+            mIoDevicesMutex.unlock();
+            ESP_LOGE(TAG, "DeactivateDevice: unknown %s", deviceID.c_str());
+            return;
+        }
+        if (it->second.is_deleted)
+        {
+            mIoDevicesMutex.unlock();
+            ESP_LOGW(TAG, "DeactivateDevice: already inactive %s", deviceID.c_str());
+            return;
+        }
+        if (mIoHome != nullptr)
+            mIoHome->DeleteDevice(deviceID);
+        it->second.is_deleted = true;
+        // Save updated device to NVS (keeps file, just marks is_deleted=true)
+        Helpers::StoredIoDevice storedDevice = {};
+        storedDevice.device = it->second;
+        Helpers::StoredIoDevice existing;
+        if (Helpers::DeviceStorage::LoadIoDevice(deviceID, existing) == ESP_OK)
+            storedDevice.linked_remotes = existing.linked_remotes;
+        Helpers::DeviceStorage::SaveIoDevice(deviceID, storedDevice);
+        mIoDevicesMutex.unlock();
+        if (sMqttHelper != nullptr)
+        {
+            sMqttHelper->SendDiscovery();
+            sMqttHelper->SendIoDeviceStatus(deviceID);
+            sMqttHelper->PublishInactiveDevicesList();
+        }
+#if CONFIG_WEB_ENABLED
+        web_server_broadcast_device_event(deviceID.c_str(), "device_deactivated");
+#endif
+        ESP_LOGI(TAG, "Device deactivated: %s", deviceID.c_str());
+    }
+
+    void IoRtsManager::ReactivateDevice(const std::string &deviceID)
+    {
+        mIoDevicesMutex.lock();
+        auto it = mIoDevices.find(deviceID);
+        if (it == mIoDevices.end())
+        {
+            mIoDevicesMutex.unlock();
+            ESP_LOGE(TAG, "ReactivateDevice: unknown %s", deviceID.c_str());
+            return;
+        }
+        if (!it->second.is_deleted)
+        {
+            mIoDevicesMutex.unlock();
+            ESP_LOGW(TAG, "ReactivateDevice: already active %s", deviceID.c_str());
+            return;
+        }
+        it->second.is_deleted = false;
+        if (mIoHome != nullptr)
+            mIoHome->RestoreDevice(deviceID, it->second);
+        // Save updated device to NVS and restore remote links
+        Helpers::StoredIoDevice storedDevice = {};
+        storedDevice.device = it->second;
+        Helpers::StoredIoDevice existing;
+        if (Helpers::DeviceStorage::LoadIoDevice(deviceID, existing) == ESP_OK)
+            storedDevice.linked_remotes = existing.linked_remotes;
+        Helpers::DeviceStorage::SaveIoDevice(deviceID, storedDevice);
+        mIoDevicesMutex.unlock();
+        // Re-link remotes in radio layer
+        if (mIoHome != nullptr)
+            for (const std::string &remoteID : storedDevice.linked_remotes)
+                mIoHome->LinkRemoteToDevice(remoteID, deviceID);
+        if (sMqttHelper != nullptr)
+        {
+            sMqttHelper->SendDiscovery();
+            sMqttHelper->SendIoDeviceStatus(deviceID);
+            sMqttHelper->PublishInactiveDevicesList();
+        }
+#if CONFIG_WEB_ENABLED
+        web_server_broadcast_device_event(deviceID.c_str(), "device_reactivated");
+#endif
+        ESP_LOGI(TAG, "Device reactivated: %s", deviceID.c_str());
+    }
+
+    bool IoRtsManager::DeleteDevice(const std::string &deviceID)
+    {
+        mIoDevicesMutex.lock();
+        auto it = mIoDevices.find(deviceID);
+        if (it == mIoDevices.end())
+        {
+            mIoDevicesMutex.unlock();
+            ESP_LOGE(TAG, "DeleteDevice: unknown %s", deviceID.c_str());
+            return false;
+        }
+        if (!it->second.is_deleted)
+        {
+            mIoDevicesMutex.unlock();
+            ESP_LOGE(TAG, "DeleteDevice: device %s is still active — deactivate first", deviceID.c_str());
+            return false;
+        }
+        mIoDevices.erase(it);
+        mIoDevicesMutex.unlock();
+        Helpers::DeviceStorage::RemoveIoDevice(deviceID);
+        if (sMqttHelper != nullptr)
+        {
+            sMqttHelper->SendDiscovery();
+            sMqttHelper->SendIoDeviceStatus(deviceID);
+            sMqttHelper->PublishInactiveDevicesList();
+        }
+#if CONFIG_WEB_ENABLED
+        web_server_broadcast_device_event(deviceID.c_str(), "device_deleted");
+#endif
+        ESP_LOGI(TAG, "Device permanently deleted: %s", deviceID.c_str());
+        return true;
+    }
+
     bool IoRtsManager::LinkRemoteToDevice(const std::string &remoteID, const std::string &deviceID)
     {
         bool success = mIoHome->LinkRemoteToDevice(remoteID, deviceID);
         if (success)
         {
-            // Add remote to storage
             Helpers::DeviceStorage::AddRemoteToIoDevice(remoteID, deviceID);
+            if (sMqttHelper != nullptr)
+                sMqttHelper->PublishDeviceRemotesList(deviceID);
         }
         return success;
     }
     void IoRtsManager::RemoveIoRemote(const std::string &remoteID)
     {
-        // Remove from Io controller
         if (mIoHome != nullptr)
             mIoHome->DeleteRemote(remoteID);
-        // Remove from storage
         Helpers::DeviceStorage::RemoveRemoteFromIoDevices(remoteID);
+        // Refresh remotes sensor for all active devices (remote may have been linked to any of them)
+        if (sMqttHelper != nullptr)
+        {
+            std::vector<std::string> activeIDs;
+            mIoDevicesMutex.lock();
+            for (const auto &[id, dev] : mIoDevices)
+                if (!dev.is_deleted)
+                    activeIDs.push_back(id);
+            mIoDevicesMutex.unlock();
+            for (const std::string &id : activeIDs)
+                sMqttHelper->PublishDeviceRemotesList(id);
+        }
     }
     void IoRtsManager::LoadIoDevicesFromStorage()
     {
@@ -225,19 +323,24 @@ namespace IoRts
 
         for (const auto &[deviceID, storedDevice] : storedDevices)
         {
-            // Restore device in protocol layer
-            mIoHome->RestoreDevice(deviceID, storedDevice.device);
-            // Add to our local map
+            // Add to our local map regardless of active/inactive state
             mIoDevicesMutex.lock();
             mIoDevices.insert({deviceID, storedDevice.device});
             mIoDevicesMutex.unlock();
-            // Restore remote links
-            for (const std::string &remoteID : storedDevice.linked_remotes)
+            if (!storedDevice.device.is_deleted)
             {
-                mIoHome->LinkRemoteToDevice(remoteID, deviceID);
+                // Only register active devices with the radio layer
+                mIoHome->RestoreDevice(deviceID, storedDevice.device);
+                for (const std::string &remoteID : storedDevice.linked_remotes)
+                    mIoHome->LinkRemoteToDevice(remoteID, deviceID);
+                ESP_LOGI(TAG, "Restored device %s (%s) with %u remote(s)",
+                         deviceID.c_str(), storedDevice.device.info.name, storedDevice.linked_remotes.size());
             }
-            ESP_LOGI(TAG, "Restored device %s (%s) with %u remote(s)",
-                     deviceID.c_str(), storedDevice.device.info.name, storedDevice.linked_remotes.size());
+            else
+            {
+                ESP_LOGI(TAG, "Loaded inactive device %s (%s) — not registered with radio",
+                         deviceID.c_str(), storedDevice.device.info.name);
+            }
         }
     }
     void IoRtsManager::InitializeIo()

@@ -84,6 +84,7 @@
         inputTiming.value = showTiming ? (popupOptions.defaultTiming || "") : "";
 
         deleteBtn.style.display = popupOptions.btnShowDelete ? "block" : "none";
+        deleteBtn.textContent = popupOptions.deleteBtnLabel || app.i18nText("button.delete", "Delete");
         cancelBtn.style.display = popupOptions.btnShowCancel ? "block" : "none";
         confirmBtn.style.display = "none";
         deleteInfo.style.display = "none";

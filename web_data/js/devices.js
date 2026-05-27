@@ -202,10 +202,55 @@
                 );
             }
 
+            if (freshDevice.inactive) {
+                // Inactive device: Re-activate (pair button) + Delete (delete button with confirm)
+                app.openPopup(
+                    app.i18nText("popup.edit_device_title", "Edit Device"),
+                    app.i18nText("popup.device_is_inactive", "This device is inactive."),
+                    infoLines,
+                    [""],
+                    {
+                        showSave: false,
+                        showInput: false,
+                        btnShowDelete: true,
+                        deleteInfo: app.i18nText("popup.delete_warning",
+                            "Permanent removal. The physical device cannot be re-paired without factory reset."),
+                        pairLabel: app.i18nText("popup.reactivate_label", "Restore device to active state:"),
+                        pairBtnName: app.i18nText("button.reactivate", "Re-activate"),
+                        onPair: async function () {
+                            try {
+                                await window.MiOpenApi.postJson("/api/action", {
+                                    deviceId: freshDevice.id, action: "reactivateDevice"
+                                });
+                                app.logStatus(app.i18nText("popup.device_reactivated", "Device re-activated."), "info");
+                                await fetchAndDisplayDevices(app);
+                            } catch (e) {
+                                app.logStatus("Error: " + e.message, "error");
+                            }
+                        },
+                        onDelete: async function () {
+                            try {
+                                await window.MiOpenApi.postJson("/api/action", {
+                                    deviceId: freshDevice.id, action: "deleteDevice"
+                                });
+                                app.logStatus(app.i18nText("popup.device_deleted", "Device permanently deleted."), "info");
+                                await fetchAndDisplayDevices(app);
+                            } catch (e) {
+                                app.logStatus("Error: " + e.message, "error");
+                            }
+                        }
+                    }
+                );
+                return;
+            }
+
             var opts = {
                 showSave: true,
                 showInput: true,
-                btnShowDelete: false,
+                btnShowDelete: true,
+                deleteBtnLabel: app.i18nText("button.deactivate", "Deactivate"),
+                deleteInfo: app.i18nText("popup.deactivate_warning",
+                    "The device will be kept as inactive and can be re-activated later."),
                 defaultValue: freshDevice.name,
                 onSave: async function (newName) {
                     if (!newName.trim() || newName === freshDevice.name) return;
@@ -219,6 +264,17 @@
                         await fetchAndDisplayDevices(app);
                     } catch (e) {
                         app.logStatus("Error renaming: " + e.message, "error");
+                    }
+                },
+                onDelete: async function () {
+                    try {
+                        await window.MiOpenApi.postJson("/api/action", {
+                            deviceId: freshDevice.id, action: "deactivateDevice"
+                        });
+                        app.logStatus(app.i18nText("popup.device_deactivated", "Device deactivated."), "info");
+                        await fetchAndDisplayDevices(app);
+                    } catch (e) {
+                        app.logStatus("Error: " + e.message, "error");
                     }
                 }
             };
@@ -283,7 +339,15 @@
                 listItem.appendChild(nameSpan);
                 listItem.appendChild(typeBadge);
 
-                buildControls(app, device, listItem, group);
+                if (device.inactive) {
+                    listItem.classList.add("inactive");
+                    var inactiveBadge = document.createElement("span");
+                    inactiveBadge.className = "type-badge inactive-badge";
+                    inactiveBadge.textContent = app.i18nText("badge.inactive", "inactive");
+                    listItem.appendChild(inactiveBadge);
+                } else {
+                    buildControls(app, device, listItem, group);
+                }
 
                 listItem.appendChild(createDeviceButton(
                     app.i18nText("button.edit", "edit"), "edit",
@@ -291,7 +355,7 @@
                 ));
 
                 deviceList.appendChild(listItem);
-                if (device.position >= 0) updateDeviceFill(device.id, device.position);
+                if (!device.inactive && device.position >= 0) updateDeviceFill(device.id, device.position);
             });
 
             app.logStatus("Device list updated.", "info");

@@ -1,8 +1,10 @@
 #include "MqttHelpers.hpp"
 #include "MqttConfig.hpp"
 #include "IoHomeConfig.hpp"
+#include "DeviceStorage.hpp"
 
 #include <algorithm>
+#include <vector>
 
 #include "cJSON.h"
 
@@ -31,17 +33,21 @@ static const std::string MQTT_CLIENT_IO_LOGGING_ID = "IoLogging";  // unique id 
 static const std::string MQTT_CLIENT_IO_PASSIVE_ID = "IoPassive";  // unique id and action for "IoPassive" component
 static const std::string MQTT_CLIENT_IO_TX_POWER_ID = "IoTxPower"; // unique id and action for "IoTxPower" component
 
-static const std::string MQTT_CLIENT_MANAGE_IO_ID = "manage_io";             // topic for IO devices management components
-static const std::string MQTT_CLIENT_ADD_DEVICE_ID = "AddIoDevice";          // unique id and action for "AddDevice" component
-static const std::string MQTT_CLIENT_REM_DEVICE_ID = "RemoveIoDevice";       // unique id and action for "RemoveDevice" component
-static const std::string MQTT_CLIENT_INV_DEVICE_ID = "InvertIoDevice";       // unique id and action for "InvertDevice" component
-static const std::string MQTT_CLIENT_LINK_REMOTE_ID = "LinkIoRemote";        // unique id and action for "LinkRemote" component
-static const std::string MQTT_CLIENT_REM_REMOTE_ID = "RemoveIoRemote";       // unique id and action for "RemoveRemote" component
-static const std::string MQTT_CLIENT_SET_DEVICE_NAME_ID = "SetIoDeviceName"; // unique id and action for "SetDeviceName" component
+static const std::string MQTT_CLIENT_MANAGE_IO_ID = "manage_io";               // topic for IO devices management components
+static const std::string MQTT_CLIENT_ADD_DEVICE_ID = "AddIoDevice";            // unique id and action for "AddDevice" component
+static const std::string MQTT_CLIENT_REM_DEVICE_ID = "RemoveIoDevice";         // backwards compat — maps to deactivate (not in discovery)
+static const std::string MQTT_CLIENT_DEACT_DEVICE_ID = "DeactivateIoDevice";   // unique id for deactivate select entity
+static const std::string MQTT_CLIENT_DEACT_SELECT_TOPIC = "deactivate_select"; // topic segment for the deactivate select entity
+static const std::string MQTT_CLIENT_DEL_DEVICE_ID = "DeleteIoDevice";         // unique id and action for "DeleteDevice" text input
+static const std::string MQTT_CLIENT_REACT_SELECT_ID = "ReactivateIoDevice";   // unique id for reactivate select entity
+static const std::string MQTT_CLIENT_REACT_SELECT_TOPIC = "reactivate_select"; // topic segment for the reactivate select entity
+static const std::string MQTT_CLIENT_INACTIVE_DEVICES_ID = "inactive_devices"; // unique id for inactive devices sensor
 
 static const std::string MQTT_CLIENT_PREFIX_IO = "io_";          // unique_id prefix for IO devices
 static const std::string MQTT_CLIENT_SUFFIX_FAV_IO = "_fav";     // unique_id suffix for IO devices "favorite" button
 static const std::string MQTT_CLIENT_SUFFIX_IDENTIFY = "_ident"; // unique_id suffix for IO devices "identify" button
+static const std::string MQTT_CLIENT_SUFFIX_MANAGE = "_manage";  // per-device manage command topic suffix
+static const std::string MQTT_CLIENT_SUFFIX_REMOTES = "_remotes"; // per-device remotes sensor topic suffix
 
 static const std::string MQTT_CLIENT_BIRTH_WILL_TOPIC = "/status"; // birth and last will topic
 static const std::string MQTT_CLIENT_BIRTH_MSG = "online";         // last will message - birth
@@ -93,6 +99,20 @@ namespace Helpers
             }
             // Send discovery
             mqttHelper->SendDiscovery();
+            // Publish inactive devices list so HA sensor and select are up to date
+            mqttHelper->PublishInactiveDevicesList();
+            // Publish linked remotes sensor for each active device
+            {
+                std::vector<std::string> activeIDs;
+                {
+                    std::lock_guard<std::mutex> guard(mqttHelper->GetIoRtsManager()->mIoDevicesMutex);
+                    for (const auto &[id, dev] : mqttHelper->GetIoRtsManager()->mIoDevices)
+                        if (!dev.is_deleted)
+                            activeIDs.push_back(id);
+                }
+                for (const std::string &id : activeIDs)
+                    mqttHelper->PublishDeviceRemotesList(id);
+            }
             // subscribe to all command topics
             topic = mqttHelper->GetTopicPrefix() + "/+" + MQTT_CLIENT_COMMAND_TOPIC;
             msg_id = esp_mqtt_client_subscribe(client, topic.c_str(), 0);
@@ -220,6 +240,7 @@ namespace Helpers
                                 mqttHelper->GetIoRtsManager()->mIoHome->AddDevice(deviceID);
                             }
                         }
+                        // RemoveIoDevice kept for backwards compat — maps to deactivate
                         cJSON *removeDeviceItem = cJSON_GetObjectItem(root, MQTT_CLIENT_REM_DEVICE_ID.c_str());
                         if (cJSON_IsString(removeDeviceItem))
                         {
@@ -227,66 +248,36 @@ namespace Helpers
                             if (deviceID.length() == NODE_ID_SIZE * 2)
                             {
                                 std::transform(deviceID.begin(), deviceID.end(), deviceID.begin(), [](unsigned char c)
-                                               { return std::toupper(c); }); // convert to uppercase
-                                mqttHelper->GetIoRtsManager()->RemoveIoDevice(deviceID);
+                                               { return std::toupper(c); });
+                                mqttHelper->GetIoRtsManager()->DeactivateDevice(deviceID);
                             }
                         }
-                        cJSON *invertDeviceItem = cJSON_GetObjectItem(root, MQTT_CLIENT_INV_DEVICE_ID.c_str());
-                        if (cJSON_IsString(invertDeviceItem))
+                        cJSON *deactDeviceItem = cJSON_GetObjectItem(root, MQTT_CLIENT_DEACT_DEVICE_ID.c_str());
+                        if (cJSON_IsString(deactDeviceItem))
                         {
-                            std::string deviceID(invertDeviceItem->valuestring);
+                            std::string deviceID(deactDeviceItem->valuestring);
                             if (deviceID.length() == NODE_ID_SIZE * 2)
                             {
                                 std::transform(deviceID.begin(), deviceID.end(), deviceID.begin(), [](unsigned char c)
-                                               { return std::toupper(c); }); // convert to uppercase
-                                mqttHelper->GetIoRtsManager()->mIoHome->InvertOpenClosePositionForDevice(deviceID);
+                                               { return std::toupper(c); });
+                                mqttHelper->GetIoRtsManager()->DeactivateDevice(deviceID);
                             }
                         }
-                        cJSON *linkRemoteToDeviceItem = cJSON_GetObjectItem(root, MQTT_CLIENT_LINK_REMOTE_ID.c_str());
-                        if (cJSON_IsString(linkRemoteToDeviceItem))
+                        cJSON *delDeviceItem = cJSON_GetObjectItem(root, MQTT_CLIENT_DEL_DEVICE_ID.c_str());
+                        if (cJSON_IsString(delDeviceItem))
                         {
-                            std::string data(linkRemoteToDeviceItem->valuestring);
-                            if (data.length() != 13 || data[6] != ';')
+                            std::string data(delDeviceItem->valuestring);
+                            // Requires "<deviceID>:CONFIRM" to prevent accidental permanent deletion
+                            if (data.length() == NODE_ID_SIZE * 2 + 8 && data.substr(NODE_ID_SIZE * 2) == ":CONFIRM")
                             {
-                                // ESP_LOGE(TAG, "Failed to parse JSON to link remote to IO device from MQTT!");
+                                std::string deviceID = data.substr(0, NODE_ID_SIZE * 2);
+                                std::transform(deviceID.begin(), deviceID.end(), deviceID.begin(), [](unsigned char c)
+                                               { return std::toupper(c); });
+                                mqttHelper->GetIoRtsManager()->DeleteDevice(deviceID);
                             }
                             else
                             {
-                                std::string deviceID = data.substr(0, NODE_ID_SIZE * 2);
-                                std::string remoteID = data.substr(NODE_ID_SIZE * 2 + 1);
-                                std::transform(deviceID.begin(), deviceID.end(), deviceID.begin(), [](unsigned char c)
-                                               { return std::toupper(c); }); // convert to uppercase
-                                std::transform(remoteID.begin(), remoteID.end(), remoteID.begin(), [](unsigned char c)
-                                               { return std::toupper(c); }); // convert to uppercase
-                                mqttHelper->GetIoRtsManager()->LinkRemoteToDevice(remoteID, deviceID);
-                            }
-                        }
-                        cJSON *removeRemoteItem = cJSON_GetObjectItem(root, MQTT_CLIENT_REM_REMOTE_ID.c_str());
-                        if (cJSON_IsString(removeRemoteItem))
-                        {
-                            std::string remoteID(removeRemoteItem->valuestring);
-                            if (remoteID.length() == NODE_ID_SIZE * 2)
-                            {
-                                std::transform(remoteID.begin(), remoteID.end(), remoteID.begin(), [](unsigned char c)
-                                               { return std::toupper(c); }); // convert to uppercase
-                                mqttHelper->GetIoRtsManager()->RemoveIoRemote(remoteID);
-                            }
-                        }
-                        cJSON *setDeviceNameItem = cJSON_GetObjectItem(root, MQTT_CLIENT_SET_DEVICE_NAME_ID.c_str());
-                        if (cJSON_IsString(setDeviceNameItem))
-                        {
-                            std::string data(setDeviceNameItem->valuestring);
-                            if (data.length() < 8 || data[6] != ';')
-                            {
-                                // ESP_LOGE(TAG, "Failed to parse JSON to change IO device name from MQTT!");
-                            }
-                            else
-                            {
-                                std::string deviceID = data.substr(0, NODE_ID_SIZE * 2);
-                                std::string deviceName = data.substr(NODE_ID_SIZE * 2 + 1);
-                                std::transform(deviceID.begin(), deviceID.end(), deviceID.begin(), [](unsigned char c)
-                                               { return std::toupper(c); }); // convert to uppercase
-                                mqttHelper->GetIoRtsManager()->mIoHome->SetDeviceName(deviceID, deviceName);
+                                ESP_LOGW(TAG, "DeleteIoDevice: requires <ID>:CONFIRM format, got: %s", data.c_str());
                             }
                         }
                         // Don't forget to delete JSON object to free memory!
@@ -298,6 +289,127 @@ namespace Helpers
                             break; // don't process IO devices commands if in passive mode
                         ESP_LOGI(TAG, "DISCOVER requested from MQTT!");
                         mqttHelper->GetIoRtsManager()->mIoHome->DiscoverAndPairDevice();
+                    }
+                    else if (entity_id.compare(MQTT_CLIENT_DEACT_SELECT_TOPIC) == 0 && topic_str.ends_with(MQTT_CLIENT_COMMAND_TOPIC))
+                    {
+                        // Deactivate select: payload is "Name (AABBCC)" or "— none —"
+                        const std::string selection(event->data, event->data_len);
+                        auto openParen = selection.rfind('(');
+                        auto closeParen = selection.rfind(')');
+                        if (openParen != std::string::npos && closeParen != std::string::npos && closeParen > openParen)
+                        {
+                            std::string deviceID = selection.substr(openParen + 1, closeParen - openParen - 1);
+                            if (deviceID.length() == NODE_ID_SIZE * 2)
+                            {
+                                std::transform(deviceID.begin(), deviceID.end(), deviceID.begin(), [](unsigned char c)
+                                               { return std::toupper(c); });
+                                ESP_LOGI(TAG, "DeactivateDevice from select: %s", deviceID.c_str());
+                                mqttHelper->GetIoRtsManager()->DeactivateDevice(deviceID);
+                                // Reset deactivate select state to placeholder
+                                std::string state_topic = mqttHelper->GetTopicPrefix() + "/" + MQTT_CLIENT_DEACT_SELECT_TOPIC + MQTT_CLIENT_STATE_TOPIC;
+                                esp_mqtt_client_publish(client, state_topic.c_str(), "— none —", 0, 0, 0);
+                            }
+                        }
+                    }
+                    else if (entity_id.compare(MQTT_CLIENT_REACT_SELECT_TOPIC) == 0 && topic_str.ends_with(MQTT_CLIENT_COMMAND_TOPIC))
+                    {
+                        // Reactivate select: payload is "Name (AABBCC)" or "— none —"
+                        const std::string selection(event->data, event->data_len);
+                        auto openParen = selection.rfind('(');
+                        auto closeParen = selection.rfind(')');
+                        if (openParen != std::string::npos && closeParen != std::string::npos && closeParen > openParen)
+                        {
+                            std::string deviceID = selection.substr(openParen + 1, closeParen - openParen - 1);
+                            if (deviceID.length() == NODE_ID_SIZE * 2)
+                            {
+                                std::transform(deviceID.begin(), deviceID.end(), deviceID.begin(), [](unsigned char c)
+                                               { return std::toupper(c); });
+                                ESP_LOGI(TAG, "ReactivateDevice from select: %s", deviceID.c_str());
+                                mqttHelper->GetIoRtsManager()->ReactivateDevice(deviceID);
+                                // Publish updated state back to the select (reset to placeholder)
+                                std::string state_topic = mqttHelper->GetTopicPrefix() + "/" + MQTT_CLIENT_REACT_SELECT_TOPIC + MQTT_CLIENT_STATE_TOPIC;
+                                esp_mqtt_client_publish(client, state_topic.c_str(), "— none —", 0, 0, 0);
+                            }
+                        }
+                    }
+                    else if (entity_id.starts_with(MQTT_CLIENT_PREFIX_IO) &&
+                             entity_id.length() > MQTT_CLIENT_PREFIX_IO.length() + MQTT_CLIENT_SUFFIX_MANAGE.length() &&
+                             entity_id.ends_with(MQTT_CLIENT_SUFFIX_MANAGE) &&
+                             topic_str.ends_with(MQTT_CLIENT_COMMAND_TOPIC))
+                    {
+                        if (mqttHelper->isIoHomePassive())
+                            break;
+                        // Extract device ID — strip "io_" prefix and "_manage" suffix
+                        std::string deviceID = entity_id.substr(
+                            MQTT_CLIENT_PREFIX_IO.length(),
+                            entity_id.length() - MQTT_CLIENT_PREFIX_IO.length() - MQTT_CLIENT_SUFFIX_MANAGE.length());
+                        if (deviceID.length() != NODE_ID_SIZE * 2)
+                        {
+                            ESP_LOGE(TAG, "Per-device manage: invalid device ID '%s'", deviceID.c_str());
+                            break;
+                        }
+                        std::transform(deviceID.begin(), deviceID.end(), deviceID.begin(), [](unsigned char c)
+                                       { return std::toupper(c); });
+                        char *buf = new char[event->data_len + 1];
+                        memcpy(buf, event->data, event->data_len);
+                        buf[event->data_len] = '\0';
+                        cJSON *root = cJSON_Parse(buf);
+                        delete[] buf;
+                        if (root == nullptr)
+                        {
+                            ESP_LOGE(TAG, "Per-device manage: failed to parse JSON for %s", deviceID.c_str());
+                            break;
+                        }
+                        cJSON *actionItem = cJSON_GetObjectItem(root, "action");
+                        cJSON *valueItem = cJSON_GetObjectItem(root, "value");
+                        if (cJSON_IsString(actionItem))
+                        {
+                            std::string action(actionItem->valuestring);
+                            if (action == "rename" && cJSON_IsString(valueItem))
+                            {
+                                std::string newName(valueItem->valuestring);
+                                ESP_LOGI(TAG, "Per-device manage: rename %s -> '%s'", deviceID.c_str(), newName.c_str());
+                                mqttHelper->GetIoRtsManager()->mIoHome->SetDeviceName(deviceID, newName);
+                            }
+                            else if (action == "deactivate")
+                            {
+                                ESP_LOGI(TAG, "Per-device manage: deactivate %s", deviceID.c_str());
+                                mqttHelper->GetIoRtsManager()->DeactivateDevice(deviceID);
+                            }
+                            else if (action == "invert")
+                            {
+                                ESP_LOGI(TAG, "Per-device manage: invert %s", deviceID.c_str());
+                                mqttHelper->GetIoRtsManager()->mIoHome->InvertOpenClosePositionForDevice(deviceID);
+                                mqttHelper->SendDiscovery(); // refresh discovery so position_open/closed swaps
+                            }
+                            else if (action == "link_remote" && cJSON_IsString(valueItem))
+                            {
+                                std::string remoteID(valueItem->valuestring);
+                                if (remoteID.length() == NODE_ID_SIZE * 2)
+                                {
+                                    std::transform(remoteID.begin(), remoteID.end(), remoteID.begin(), [](unsigned char c)
+                                                   { return std::toupper(c); });
+                                    ESP_LOGI(TAG, "Per-device manage: link remote %s -> device %s", remoteID.c_str(), deviceID.c_str());
+                                    mqttHelper->GetIoRtsManager()->LinkRemoteToDevice(remoteID, deviceID);
+                                }
+                            }
+                            else if (action == "remove_remote" && cJSON_IsString(valueItem))
+                            {
+                                std::string remoteID(valueItem->valuestring);
+                                if (remoteID.length() == NODE_ID_SIZE * 2)
+                                {
+                                    std::transform(remoteID.begin(), remoteID.end(), remoteID.begin(), [](unsigned char c)
+                                                   { return std::toupper(c); });
+                                    ESP_LOGI(TAG, "Per-device manage: remove remote %s", remoteID.c_str());
+                                    mqttHelper->GetIoRtsManager()->RemoveIoRemote(remoteID);
+                                }
+                            }
+                            else
+                            {
+                                ESP_LOGW(TAG, "Per-device manage: unknown action '%s' for %s", action.c_str(), deviceID.c_str());
+                            }
+                        }
+                        cJSON_Delete(root);
                     }
                     else if (entity_id.starts_with(MQTT_CLIENT_PREFIX_IO))
                     {
@@ -495,7 +607,7 @@ namespace Helpers
         {
             error = error || (cJSON_AddStringToObject(dev, "ids", clientId.c_str()) == NULL);  // identifiers
             error = error || (cJSON_AddStringToObject(dev, "name", clientId.c_str()) == NULL); // name
-            error = error || (cJSON_AddStringToObject(dev, "mf", "nicolas5000") == NULL);      // manufacturer
+            error = error || (cJSON_AddStringToObject(dev, "mf", "nicolas5000 & rspaargaren") == NULL); // manufacturer
             error = error || (cJSON_AddStringToObject(dev, "sw", desc->version) == NULL);      // sw_version
         }
 
@@ -632,75 +744,114 @@ namespace Helpers
                 std::string command_template = "{\"" + MQTT_CLIENT_ADD_DEVICE_ID + "\": \"{{ value }}\"}";
                 error = error || (cJSON_AddStringToObject(cmp, "command_template", command_template.c_str()) == NULL); // command_template
             }
-            // Add "RemoveIoDevice" text https://www.home-assistant.io/integrations/text.mqtt/
-            cmp = cJSON_AddObjectToObject(cmps, MQTT_CLIENT_REM_DEVICE_ID.c_str());
+            // Add "DeactivateIoDevice" select (dropdown) — options are currently active devices
+            cmp = cJSON_AddObjectToObject(cmps, MQTT_CLIENT_DEACT_DEVICE_ID.c_str());
             if (cmp == NULL)
                 error = true;
             else
             {
-                error = error || (cJSON_AddStringToObject(cmp, "p", "text") == NULL);                                    // platform
-                error = error || (cJSON_AddStringToObject(cmp, "unique_id", MQTT_CLIENT_REM_DEVICE_ID.c_str()) == NULL); // unique_id
-                error = error || (cJSON_AddStringToObject(cmp, "name", "Remove IO device") == NULL);                     // name
-                std::string command_topic = mTopicPrefix + "/" + MQTT_CLIENT_MANAGE_IO_ID + MQTT_CLIENT_COMMAND_TOPIC;
-                error = error || (cJSON_AddStringToObject(cmp, "command_topic", command_topic.c_str()) == NULL); // command_topic
-                std::string command_template = "{\"" + MQTT_CLIENT_REM_DEVICE_ID + "\": \"{{ value }}\"}";
-                error = error || (cJSON_AddStringToObject(cmp, "command_template", command_template.c_str()) == NULL); // command_template
+                error = error || (cJSON_AddStringToObject(cmp, "p", "select") == NULL);
+                error = error || (cJSON_AddStringToObject(cmp, "unique_id", MQTT_CLIENT_DEACT_DEVICE_ID.c_str()) == NULL);
+                error = error || (cJSON_AddStringToObject(cmp, "name", "Deactivate IO device") == NULL);
+                error = error || (cJSON_AddStringToObject(cmp, "icon", "mdi:eye-off-outline") == NULL);
+                error = error || (cJSON_AddStringToObject(cmp, "entity_category", "config") == NULL);
+                std::string state_topic = mTopicPrefix + "/" + MQTT_CLIENT_DEACT_SELECT_TOPIC + MQTT_CLIENT_STATE_TOPIC;
+                error = error || (cJSON_AddStringToObject(cmp, "state_topic", state_topic.c_str()) == NULL);
+                std::string command_topic = mTopicPrefix + "/" + MQTT_CLIENT_DEACT_SELECT_TOPIC + MQTT_CLIENT_COMMAND_TOPIC;
+                error = error || (cJSON_AddStringToObject(cmp, "command_topic", command_topic.c_str()) == NULL);
+                // Build options list from active devices
+                cJSON *options = cJSON_AddArrayToObject(cmp, "options");
+                if (options == NULL)
+                {
+                    error = true;
+                }
+                else
+                {
+                    bool hasActive = false;
+                    {
+                        std::lock_guard<std::mutex> guard(mIoRtsManager->mIoDevicesMutex);
+                        for (const auto &[id, dev] : mIoRtsManager->mIoDevices)
+                        {
+                            if (!dev.is_deleted)
+                            {
+                                std::string option = std::string(dev.info.name) + " (" + id + ")";
+                                cJSON_AddItemToArray(options, cJSON_CreateString(option.c_str()));
+                                hasActive = true;
+                            }
+                        }
+                    }
+                    if (!hasActive)
+                        cJSON_AddItemToArray(options, cJSON_CreateString("— none —"));
+                }
             }
-            // Add "InvertIoDevice" text https://www.home-assistant.io/integrations/text.mqtt/
-            cmp = cJSON_AddObjectToObject(cmps, MQTT_CLIENT_INV_DEVICE_ID.c_str());
+            // Add "DeleteIoDevice" text (requires <ID>:CONFIRM — no HA confirmation on selects)
+            cmp = cJSON_AddObjectToObject(cmps, MQTT_CLIENT_DEL_DEVICE_ID.c_str());
             if (cmp == NULL)
                 error = true;
             else
             {
-                error = error || (cJSON_AddStringToObject(cmp, "p", "text") == NULL);                                    // platform
-                error = error || (cJSON_AddStringToObject(cmp, "unique_id", MQTT_CLIENT_INV_DEVICE_ID.c_str()) == NULL); // unique_id
-                error = error || (cJSON_AddStringToObject(cmp, "name", "Invert IO device") == NULL);                     // name
+                error = error || (cJSON_AddStringToObject(cmp, "p", "text") == NULL);
+                error = error || (cJSON_AddStringToObject(cmp, "unique_id", MQTT_CLIENT_DEL_DEVICE_ID.c_str()) == NULL);
+                error = error || (cJSON_AddStringToObject(cmp, "name", "Delete IO device (ID:CONFIRM)") == NULL);
+                error = error || (cJSON_AddStringToObject(cmp, "entity_category", "config") == NULL);
                 std::string command_topic = mTopicPrefix + "/" + MQTT_CLIENT_MANAGE_IO_ID + MQTT_CLIENT_COMMAND_TOPIC;
-                error = error || (cJSON_AddStringToObject(cmp, "command_topic", command_topic.c_str()) == NULL); // command_topic
-                std::string command_template = "{\"" + MQTT_CLIENT_INV_DEVICE_ID + "\": \"{{ value }}\"}";
-                error = error || (cJSON_AddStringToObject(cmp, "command_template", command_template.c_str()) == NULL); // command_template
+                error = error || (cJSON_AddStringToObject(cmp, "command_topic", command_topic.c_str()) == NULL);
+                std::string command_template = "{\"" + MQTT_CLIENT_DEL_DEVICE_ID + "\": \"{{ value }}\"}";
+                error = error || (cJSON_AddStringToObject(cmp, "command_template", command_template.c_str()) == NULL);
             }
-            // Add "LinkIoRemote" text https://www.home-assistant.io/integrations/text.mqtt/
-            cmp = cJSON_AddObjectToObject(cmps, MQTT_CLIENT_LINK_REMOTE_ID.c_str());
+            // Add "ReactivateIoDevice" select (dropdown) — options are inactive devices
+            cmp = cJSON_AddObjectToObject(cmps, MQTT_CLIENT_REACT_SELECT_ID.c_str());
             if (cmp == NULL)
                 error = true;
             else
             {
-                error = error || (cJSON_AddStringToObject(cmp, "p", "text") == NULL);                                     // platform
-                error = error || (cJSON_AddStringToObject(cmp, "unique_id", MQTT_CLIENT_LINK_REMOTE_ID.c_str()) == NULL); // unique_id
-                error = error || (cJSON_AddStringToObject(cmp, "name", "Link IO device to remote") == NULL);              // name
-                std::string command_topic = mTopicPrefix + "/" + MQTT_CLIENT_MANAGE_IO_ID + MQTT_CLIENT_COMMAND_TOPIC;
-                error = error || (cJSON_AddStringToObject(cmp, "command_topic", command_topic.c_str()) == NULL); // command_topic
-                std::string command_template = "{\"" + MQTT_CLIENT_LINK_REMOTE_ID + "\": \"{{ value }}\"}";
-                error = error || (cJSON_AddStringToObject(cmp, "command_template", command_template.c_str()) == NULL); // command_template
+                error = error || (cJSON_AddStringToObject(cmp, "p", "select") == NULL);
+                error = error || (cJSON_AddStringToObject(cmp, "unique_id", MQTT_CLIENT_REACT_SELECT_ID.c_str()) == NULL);
+                error = error || (cJSON_AddStringToObject(cmp, "name", "Re-activate IO device") == NULL);
+                error = error || (cJSON_AddStringToObject(cmp, "icon", "mdi:eye-check") == NULL);
+                error = error || (cJSON_AddStringToObject(cmp, "entity_category", "config") == NULL);
+                std::string state_topic = mTopicPrefix + "/" + MQTT_CLIENT_REACT_SELECT_TOPIC + MQTT_CLIENT_STATE_TOPIC;
+                error = error || (cJSON_AddStringToObject(cmp, "state_topic", state_topic.c_str()) == NULL);
+                std::string command_topic = mTopicPrefix + "/" + MQTT_CLIENT_REACT_SELECT_TOPIC + MQTT_CLIENT_COMMAND_TOPIC;
+                error = error || (cJSON_AddStringToObject(cmp, "command_topic", command_topic.c_str()) == NULL);
+                // Build options list from inactive devices
+                cJSON *options = cJSON_AddArrayToObject(cmp, "options");
+                if (options == NULL)
+                {
+                    error = true;
+                }
+                else
+                {
+                    bool hasInactive = false;
+                    {
+                        std::lock_guard<std::mutex> guard(mIoRtsManager->mIoDevicesMutex);
+                        for (const auto &[id, dev] : mIoRtsManager->mIoDevices)
+                        {
+                            if (dev.is_deleted)
+                            {
+                                std::string option = std::string(dev.info.name) + " (" + id + ")";
+                                cJSON_AddItemToArray(options, cJSON_CreateString(option.c_str()));
+                                hasInactive = true;
+                            }
+                        }
+                    }
+                    if (!hasInactive)
+                        cJSON_AddItemToArray(options, cJSON_CreateString("— none —"));
+                }
             }
-            // Add "RemoveIoRemote" text https://www.home-assistant.io/integrations/text.mqtt/
-            cmp = cJSON_AddObjectToObject(cmps, MQTT_CLIENT_REM_REMOTE_ID.c_str());
+            // Add "inactive_devices" sensor
+            cmp = cJSON_AddObjectToObject(cmps, MQTT_CLIENT_INACTIVE_DEVICES_ID.c_str());
             if (cmp == NULL)
                 error = true;
             else
             {
-                error = error || (cJSON_AddStringToObject(cmp, "p", "text") == NULL);                                    // platform
-                error = error || (cJSON_AddStringToObject(cmp, "unique_id", MQTT_CLIENT_REM_REMOTE_ID.c_str()) == NULL); // unique_id
-                error = error || (cJSON_AddStringToObject(cmp, "name", "Remove IO remote") == NULL);                     // name
-                std::string command_topic = mTopicPrefix + "/" + MQTT_CLIENT_MANAGE_IO_ID + MQTT_CLIENT_COMMAND_TOPIC;
-                error = error || (cJSON_AddStringToObject(cmp, "command_topic", command_topic.c_str()) == NULL); // command_topic
-                std::string command_template = "{\"" + MQTT_CLIENT_REM_REMOTE_ID + "\": \"{{ value }}\"}";
-                error = error || (cJSON_AddStringToObject(cmp, "command_template", command_template.c_str()) == NULL); // command_template
-            }
-            // Add "SetIoDeviceName" text https://www.home-assistant.io/integrations/text.mqtt/
-            cmp = cJSON_AddObjectToObject(cmps, MQTT_CLIENT_SET_DEVICE_NAME_ID.c_str());
-            if (cmp == NULL)
-                error = true;
-            else
-            {
-                error = error || (cJSON_AddStringToObject(cmp, "p", "text") == NULL);                                         // platform
-                error = error || (cJSON_AddStringToObject(cmp, "unique_id", MQTT_CLIENT_SET_DEVICE_NAME_ID.c_str()) == NULL); // unique_id
-                error = error || (cJSON_AddStringToObject(cmp, "name", "Change IO device name") == NULL);                     // name
-                std::string command_topic = mTopicPrefix + "/" + MQTT_CLIENT_MANAGE_IO_ID + MQTT_CLIENT_COMMAND_TOPIC;
-                error = error || (cJSON_AddStringToObject(cmp, "command_topic", command_topic.c_str()) == NULL); // command_topic
-                std::string command_template = "{\"" + MQTT_CLIENT_SET_DEVICE_NAME_ID + "\": \"{{ value }}\"}";
-                error = error || (cJSON_AddStringToObject(cmp, "command_template", command_template.c_str()) == NULL); // command_template
+                error = error || (cJSON_AddStringToObject(cmp, "p", "sensor") == NULL);
+                error = error || (cJSON_AddStringToObject(cmp, "unique_id", MQTT_CLIENT_INACTIVE_DEVICES_ID.c_str()) == NULL);
+                error = error || (cJSON_AddStringToObject(cmp, "name", "Inactive IO devices") == NULL);
+                error = error || (cJSON_AddStringToObject(cmp, "icon", "mdi:eye-off") == NULL);
+                error = error || (cJSON_AddStringToObject(cmp, "entity_category", "diagnostic") == NULL);
+                std::string state_topic = mTopicPrefix + "/" + MQTT_CLIENT_INACTIVE_DEVICES_ID + MQTT_CLIENT_STATE_TOPIC;
+                error = error || (cJSON_AddStringToObject(cmp, "state_topic", state_topic.c_str()) == NULL);
             }
         }
 
@@ -803,6 +954,8 @@ namespace Helpers
                 std::string device_tilt_topic = GetTopicPrefix() + "/" + device_id + MQTT_CLIENT_TILT_TOPIC;
                 std::string device_cmd_tilt_topic = GetTopicPrefix() + "/" + device_id + MQTT_CLIENT_COMMAND_TILT_TOPIC;
                 std::string device_cmd_fav_pos_topic = GetTopicPrefix() + "/" + device_id + MQTT_CLIENT_COMMAND_FAV_POS_TOPIC;
+                std::string device_manage_cmd_topic = GetTopicPrefix() + "/" + MQTT_CLIENT_PREFIX_IO + it->first + MQTT_CLIENT_SUFFIX_MANAGE + MQTT_CLIENT_COMMAND_TOPIC;
+                std::string device_remotes_state_topic = GetTopicPrefix() + "/" + MQTT_CLIENT_PREFIX_IO + it->first + MQTT_CLIENT_SUFFIX_REMOTES + MQTT_CLIENT_STATE_TOPIC;
                 std::string device_platform;
 
                 cJSON *cmp = cJSON_AddObjectToObject(cmps, device_id.c_str());
@@ -963,6 +1116,93 @@ namespace Helpers
                         error = error || (cJSON_AddStringToObject(ident, "device_class", "identify") == NULL);                // device_class
                         error = error || (cJSON_AddStringToObject(ident, "entity_category", "diagnostic") == NULL);           // entity_category
                     }
+                }
+                // Per-device management entities (configuration category)
+                if (!error)
+                {
+                    std::string deviceNodeID = it->first;
+                    std::string devName = it->second.info.name;
+                    // rename text
+                    {
+                        std::string uid = MQTT_CLIENT_PREFIX_IO + deviceNodeID + "_rename";
+                        cJSON *cmpRename = cJSON_AddObjectToObject(cmps, uid.c_str());
+                        if (cmpRename == NULL) { error = true; goto manage_done; }
+                        error = error || (cJSON_AddStringToObject(cmpRename, "p", "text") == NULL);
+                        error = error || (cJSON_AddStringToObject(cmpRename, "unique_id", uid.c_str()) == NULL);
+                        error = error || (cJSON_AddStringToObject(cmpRename, "name", (devName + " Rename").c_str()) == NULL);
+                        error = error || (cJSON_AddStringToObject(cmpRename, "entity_category", "config") == NULL);
+                        error = error || (cJSON_AddStringToObject(cmpRename, "icon", "mdi:rename") == NULL);
+                        error = error || (cJSON_AddStringToObject(cmpRename, "command_topic", device_manage_cmd_topic.c_str()) == NULL);
+                        std::string tmpl = "{\"action\":\"rename\",\"value\":\"{{ value }}\"}";
+                        error = error || (cJSON_AddStringToObject(cmpRename, "command_template", tmpl.c_str()) == NULL);
+                    }
+                    // deactivate button
+                    {
+                        std::string uid = MQTT_CLIENT_PREFIX_IO + deviceNodeID + "_deactivate";
+                        cJSON *cmpDeact = cJSON_AddObjectToObject(cmps, uid.c_str());
+                        if (cmpDeact == NULL) { error = true; goto manage_done; }
+                        error = error || (cJSON_AddStringToObject(cmpDeact, "p", "button") == NULL);
+                        error = error || (cJSON_AddStringToObject(cmpDeact, "unique_id", uid.c_str()) == NULL);
+                        error = error || (cJSON_AddStringToObject(cmpDeact, "name", (devName + " Deactivate").c_str()) == NULL);
+                        error = error || (cJSON_AddStringToObject(cmpDeact, "entity_category", "config") == NULL);
+                        error = error || (cJSON_AddStringToObject(cmpDeact, "icon", "mdi:eye-off-outline") == NULL);
+                        error = error || (cJSON_AddStringToObject(cmpDeact, "command_topic", device_manage_cmd_topic.c_str()) == NULL);
+                        error = error || (cJSON_AddStringToObject(cmpDeact, "payload_press", "{\"action\":\"deactivate\"}") == NULL);
+                    }
+                    // invert button
+                    {
+                        std::string uid = MQTT_CLIENT_PREFIX_IO + deviceNodeID + "_invert";
+                        cJSON *cmpInvert = cJSON_AddObjectToObject(cmps, uid.c_str());
+                        if (cmpInvert == NULL) { error = true; goto manage_done; }
+                        error = error || (cJSON_AddStringToObject(cmpInvert, "p", "button") == NULL);
+                        error = error || (cJSON_AddStringToObject(cmpInvert, "unique_id", uid.c_str()) == NULL);
+                        error = error || (cJSON_AddStringToObject(cmpInvert, "name", (devName + " Invert open/close").c_str()) == NULL);
+                        error = error || (cJSON_AddStringToObject(cmpInvert, "entity_category", "config") == NULL);
+                        error = error || (cJSON_AddStringToObject(cmpInvert, "icon", "mdi:swap-vertical") == NULL);
+                        error = error || (cJSON_AddStringToObject(cmpInvert, "command_topic", device_manage_cmd_topic.c_str()) == NULL);
+                        error = error || (cJSON_AddStringToObject(cmpInvert, "payload_press", "{\"action\":\"invert\"}") == NULL);
+                    }
+                    // link_remote text
+                    {
+                        std::string uid = MQTT_CLIENT_PREFIX_IO + deviceNodeID + "_link_remote";
+                        cJSON *cmpLink = cJSON_AddObjectToObject(cmps, uid.c_str());
+                        if (cmpLink == NULL) { error = true; goto manage_done; }
+                        error = error || (cJSON_AddStringToObject(cmpLink, "p", "text") == NULL);
+                        error = error || (cJSON_AddStringToObject(cmpLink, "unique_id", uid.c_str()) == NULL);
+                        error = error || (cJSON_AddStringToObject(cmpLink, "name", (devName + " Link remote").c_str()) == NULL);
+                        error = error || (cJSON_AddStringToObject(cmpLink, "entity_category", "config") == NULL);
+                        error = error || (cJSON_AddStringToObject(cmpLink, "icon", "mdi:remote-tv") == NULL);
+                        error = error || (cJSON_AddStringToObject(cmpLink, "command_topic", device_manage_cmd_topic.c_str()) == NULL);
+                        std::string tmpl = "{\"action\":\"link_remote\",\"value\":\"{{ value }}\"}";
+                        error = error || (cJSON_AddStringToObject(cmpLink, "command_template", tmpl.c_str()) == NULL);
+                    }
+                    // linked_remotes diagnostic sensor
+                    {
+                        std::string uid = MQTT_CLIENT_PREFIX_IO + deviceNodeID + MQTT_CLIENT_SUFFIX_REMOTES;
+                        cJSON *cmpRemotes = cJSON_AddObjectToObject(cmps, uid.c_str());
+                        if (cmpRemotes == NULL) { error = true; goto manage_done; }
+                        error = error || (cJSON_AddStringToObject(cmpRemotes, "p", "sensor") == NULL);
+                        error = error || (cJSON_AddStringToObject(cmpRemotes, "unique_id", uid.c_str()) == NULL);
+                        error = error || (cJSON_AddStringToObject(cmpRemotes, "name", (devName + " Linked remotes").c_str()) == NULL);
+                        error = error || (cJSON_AddStringToObject(cmpRemotes, "entity_category", "diagnostic") == NULL);
+                        error = error || (cJSON_AddStringToObject(cmpRemotes, "icon", "mdi:remote") == NULL);
+                        error = error || (cJSON_AddStringToObject(cmpRemotes, "state_topic", device_remotes_state_topic.c_str()) == NULL);
+                    }
+                    // remove_remote text
+                    {
+                        std::string uid = MQTT_CLIENT_PREFIX_IO + deviceNodeID + "_remove_remote";
+                        cJSON *cmpRemRem = cJSON_AddObjectToObject(cmps, uid.c_str());
+                        if (cmpRemRem == NULL) { error = true; goto manage_done; }
+                        error = error || (cJSON_AddStringToObject(cmpRemRem, "p", "text") == NULL);
+                        error = error || (cJSON_AddStringToObject(cmpRemRem, "unique_id", uid.c_str()) == NULL);
+                        error = error || (cJSON_AddStringToObject(cmpRemRem, "name", (devName + " Remove remote").c_str()) == NULL);
+                        error = error || (cJSON_AddStringToObject(cmpRemRem, "entity_category", "config") == NULL);
+                        error = error || (cJSON_AddStringToObject(cmpRemRem, "icon", "mdi:remote-off") == NULL);
+                        error = error || (cJSON_AddStringToObject(cmpRemRem, "command_topic", device_manage_cmd_topic.c_str()) == NULL);
+                        std::string tmpl = "{\"action\":\"remove_remote\",\"value\":\"{{ value }}\"}";
+                        error = error || (cJSON_AddStringToObject(cmpRemRem, "command_template", tmpl.c_str()) == NULL);
+                    }
+                    manage_done:;
                 }
             }
 
@@ -1139,6 +1379,50 @@ namespace Helpers
             }
         }
         // Mutex automatically released!
+    }
+    void MqttHelpers::PublishInactiveDevicesList()
+    {
+        // Build semicolon-separated list of inactive devices and publish to state topic
+        std::string list;
+        {
+            std::lock_guard<std::mutex> guard(mIoRtsManager->mIoDevicesMutex);
+            for (const auto &[id, dev] : mIoRtsManager->mIoDevices)
+            {
+                if (dev.is_deleted)
+                {
+                    if (!list.empty()) list += "; ";
+                    list += std::string(dev.info.name) + " (" + id + ")";
+                }
+            }
+        }
+        if (list.empty()) list = "none";
+        std::string topic = mTopicPrefix + "/" + MQTT_CLIENT_INACTIVE_DEVICES_ID + MQTT_CLIENT_STATE_TOPIC;
+        esp_mqtt_client_publish(mMqttClientHandle, topic.c_str(), list.c_str(), 0, 0, 1);
+        // Reset both select states to placeholder
+        std::string react_state = mTopicPrefix + "/" + MQTT_CLIENT_REACT_SELECT_TOPIC + MQTT_CLIENT_STATE_TOPIC;
+        esp_mqtt_client_publish(mMqttClientHandle, react_state.c_str(), "— none —", 0, 0, 0);
+        std::string deact_state = mTopicPrefix + "/" + MQTT_CLIENT_DEACT_SELECT_TOPIC + MQTT_CLIENT_STATE_TOPIC;
+        esp_mqtt_client_publish(mMqttClientHandle, deact_state.c_str(), "— none —", 0, 0, 0);
+        // Re-publish controller discovery to update both dropdown option lists in HA
+        SendControllerDiscovery();
+    }
+    void MqttHelpers::PublishDeviceRemotesList(const std::string &deviceID)
+    {
+        if (!mStarted || mMqttClientHandle == nullptr)
+            return;
+        Helpers::StoredIoDevice stored;
+        std::string list;
+        if (Helpers::DeviceStorage::LoadIoDevice(deviceID, stored) == ESP_OK)
+        {
+            for (const std::string &remote : stored.linked_remotes)
+            {
+                if (!list.empty()) list += "; ";
+                list += remote;
+            }
+        }
+        if (list.empty()) list = "none";
+        std::string topic = mTopicPrefix + "/" + MQTT_CLIENT_PREFIX_IO + deviceID + MQTT_CLIENT_SUFFIX_REMOTES + MQTT_CLIENT_STATE_TOPIC;
+        esp_mqtt_client_publish(mMqttClientHandle, topic.c_str(), list.c_str(), 0, 0, 1);
     }
     void MqttHelpers::SendLog(const std::string &log)
     {

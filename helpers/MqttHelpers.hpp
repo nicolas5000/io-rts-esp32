@@ -47,6 +47,13 @@ namespace Helpers
         /// @param log log message to send
         void SendLog(const std::string &log);
 
+        /// @brief Publish the list of inactive devices to the MQTT state topic and refresh controller discovery
+        void PublishInactiveDevicesList();
+
+        /// @brief Publish the linked remotes sensor state for a specific IO device
+        /// @param deviceID IO device ID
+        void PublishDeviceRemotesList(const std::string &deviceID);
+
     private:
         /// @brief Send controller device discovery message (reboot, config, management components)
         void SendControllerDiscovery();

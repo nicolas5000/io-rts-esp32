@@ -408,6 +408,14 @@ ul#device-list li .btn-fav {
     gap: 2px;
     flex-wrap: wrap;
 }
+ul#device-list li.device.inactive {
+    opacity: 0.55;
+    background: var(--color-input) !important;
+    filter: grayscale(40%);
+}
+.inactive-badge {
+    background: rgba(120,0,0,0.35);
+}
 @media (min-width: 768px) {
     main > div, .card-popup {
         grid-template-columns: repeat(2, 1fr);

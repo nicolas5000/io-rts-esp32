@@ -228,6 +228,15 @@ void web_server_broadcast_position(const char *device_id, int position, bool is_
         if (s_ws_fds[i] != -1) ws_send_str(s_ws_fds[i], buf);
 }
 
+void web_server_broadcast_device_event(const char *device_id, const char *event_type)
+{
+    if (!s_server) return;
+    char buf[128];
+    snprintf(buf, sizeof(buf), "{\"type\":\"%s\",\"id\":\"%s\"}", event_type, device_id);
+    for (int i = 0; i < WS_MAX_CLIENTS; i++)
+        if (s_ws_fds[i] != -1) ws_send_str(s_ws_fds[i], buf);
+}
+
 // Classify a log line as "error", "info", or "debug" for the web log filter.
 // ESP log lines start with E/W/I/D/V followed by ' (timestamp) tag: message'.
 static const char *log_classify(const char *line)
@@ -355,11 +364,10 @@ static esp_err_t api_devices_get(httpd_req_t *req)
 
     s_manager->mIoDevicesMutex.lock();
     for (const auto &[id, dev] : s_manager->mIoDevices) {
-        if (dev.is_deleted) continue;
-
         cJSON *obj = cJSON_CreateObject();
         cJSON_AddStringToObject(obj, "id", id.c_str());
         cJSON_AddStringToObject(obj, "name", dev.info.name);
+        cJSON_AddBoolToObject(obj, "inactive", dev.is_deleted);
 
         int pos  = (dev.position == iohome::UNKNOWN_POSITION) ? -1 : (int)dev.position;
         int tilt = (dev.tilt     == iohome::UNKNOWN_POSITION) ? -1 : (int)dev.tilt;
@@ -469,6 +477,19 @@ static esp_err_t api_action_post(httpd_req_t *req)
         if (strlen(remoteId) > 0) { s_manager->RemoveIoRemote(remoteId); ok = true; }
     } else if (strcmp(action, "addRemote") == 0) {
         ok = true; // name-only registration; link separately via linkRemote
+    } else if (strcmp(action, "deactivateDevice") == 0) {
+        if (strlen(deviceId) > 0) { s_manager->DeactivateDevice(deviceId); ok = true; }
+    } else if (strcmp(action, "reactivateDevice") == 0) {
+        if (strlen(deviceId) > 0) { s_manager->ReactivateDevice(deviceId); ok = true; }
+    } else if (strcmp(action, "deleteDevice") == 0) {
+        if (strlen(deviceId) > 0) {
+            ok = s_manager->DeleteDevice(deviceId);
+            if (!ok) {
+                cJSON_Delete(json);
+                send_result(req, false, "Deactivate the device first before deleting.");
+                return ESP_OK;
+            }
+        }
     } else {
         cJSON_Delete(json);
         send_result(req, false, "Unknown action");

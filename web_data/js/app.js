@@ -202,6 +202,12 @@
                     app.updateDeviceFill(data.id, data.position);
                 } else if (data.type === "init") {
                     app.fetchAndDisplayDevices();
+                } else if (data.type === "device_deactivated" || data.type === "device_reactivated") {
+                    app.fetchAndDisplayDevices();
+                } else if (data.type === "device_deleted") {
+                    var el = document.querySelector('.device[data-id="' + data.id + '"]');
+                    if (el) el.closest("li") ? el.closest("li").remove() : el.remove();
+                    app.logStatus("Device removed.", "info");
                 }
             } catch (e) { /* ignore malformed frames */ }
         };

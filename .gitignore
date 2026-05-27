@@ -94,3 +94,6 @@ CLAUDE_*.md
 
 # Tools
 tools/console_probe.py
+
+# Local implementation prompts (kept out of repo)
+*-prompt.md

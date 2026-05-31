@@ -17,7 +17,6 @@ static struct
 {
     struct arg_lit *read;
     struct arg_lit *del;
-    struct arg_lit *wipe;
     struct arg_str *ssid;
     struct arg_str *pwd;
     struct arg_int *saemode;
@@ -47,11 +46,6 @@ static int do_configwifi_cmd(int argc, char **argv)
     {
         NetworkConfig::DeleteWifiConfig();
         ESP_LOGI(TAG, "Wifi configuration restored to default values. New configuration will be applied after reboot!");
-    }
-    else if (configwifi_args.wipe->count > 0)
-    {
-        NetworkConfig::DeleteWifiConfig();
-        ESP_LOGI(TAG, "Wifi credentials wiped (device will enter provisioning AP on next boot). Reboot to apply!");
     }
     else
     {
@@ -126,14 +120,13 @@ static int do_configwifi_cmd(int argc, char **argv)
 void register_configwifi(void)
 {
     configwifi_args.read = arg_lit0("r", "read", "Read current configuration from storage (no other argument required)");
-    configwifi_args.del = arg_lit0("d", "delete", "Delete current configuration in storage (no other argument required)");
-    configwifi_args.wipe = arg_lit0("w", "wipe", "Wipe credentials to empty (triggers provisioning AP on next boot)");
+    configwifi_args.del = arg_lit0("d", "delete", "Delete current configuration in storage — device enters provisioning AP on next boot");
     configwifi_args.ssid = arg_str0(NULL, "ssid", "<SSID>", "Wifi SSID");
     configwifi_args.pwd = arg_str0(NULL, "pwd", "<password>", "Wifi password");
     configwifi_args.saemode = arg_int0(NULL, "saemode", "<SAE mode>", "Integer value: 1 = HUNT AND PECK, 2 = H2E, 3 = BOTH");
     configwifi_args.saepwid = arg_str0(NULL, "saepwid", "<SAE pass>", "SAE password identifier");
     configwifi_args.auth = arg_str0(NULL, "auth", "<threshold>", "Authentication threshold: OPEN, WEP, WPA-PSK, WPA/WPA2-PSK, WPA2-PSK, WAPI-PSK, WPA2/WPA3-PSK, WPA3-PSK");
-    configwifi_args.end = arg_end(8);
+    configwifi_args.end = arg_end(7);
 
     const esp_console_cmd_t configwifi_cmd = {
         .command = "config_wifi",

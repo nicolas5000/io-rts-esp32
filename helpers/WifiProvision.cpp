@@ -4,6 +4,7 @@
 #ifdef CONFIG_CONNECTIVITY_CHOICE_WIFI
 
 #include "NetworkConfig.hpp"
+#include "NetworkHelpers.hpp"
 
 #include "esp_event.h"
 #include "esp_http_server.h"
@@ -22,11 +23,13 @@
 
 static const char *TAG = "wifi_provision";
 static const char *PROVISION_AP_SSID = "io-rts-setup";
+static bool sIsFallback = false;
 
 namespace Helpers
 {
     void WifiProvision::StartAP()
     {
+        // netif and event loop are not yet initialised in the no-credentials boot path
         ESP_ERROR_CHECK(esp_netif_init());
         ESP_ERROR_CHECK(esp_event_loop_create_default());
 
@@ -38,18 +41,26 @@ namespace Helpers
 
         wifi_config_t ap_config = {};
         strncpy((char *)ap_config.ap.ssid, PROVISION_AP_SSID, sizeof(ap_config.ap.ssid));
-        ap_config.ap.ssid_len = strlen(PROVISION_AP_SSID);
-        ap_config.ap.channel = 1;
-        ap_config.ap.authmode = WIFI_AUTH_OPEN;
-        ap_config.ap.max_connection = 1;
+        ap_config.ap.ssid_len        = strlen(PROVISION_AP_SSID);
+        ap_config.ap.channel         = 1;
+        ap_config.ap.max_connection  = 4;
         ap_config.ap.beacon_interval = 200;
+        // WPA2 requires a password of at least 8 characters
+        if (strlen(CONFIG_CMD_LINE_MANAGEMENT_DEFAULT_PWD) >= 8) {
+            ap_config.ap.authmode = WIFI_AUTH_WPA2_PSK;
+            strncpy((char *)ap_config.ap.password, CONFIG_CMD_LINE_MANAGEMENT_DEFAULT_PWD,
+                    sizeof(ap_config.ap.password) - 1);
+        } else {
+            ap_config.ap.authmode = WIFI_AUTH_OPEN;
+            ESP_LOGW(TAG, "CLI password < 8 chars — provisioning AP is OPEN (change password for WPA2)");
+        }
 
         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_config));
         ESP_ERROR_CHECK(esp_wifi_start());
 
-        ESP_LOGI(TAG, "Provisioning AP started: SSID=io-rts-setup, IP=192.168.4.1");
+        ESP_LOGI(TAG, "Provisioning AP started: SSID=io-rts-setup (WPA2), IP=192.168.4.1");
 
-        StartProvisionServer();
+        StartProvisionServer(false);
         StartDnsServer();
     }
 
@@ -225,10 +236,78 @@ namespace Helpers
         return ESP_OK;
     }
 
+    static const char *wifi_reason_text(uint8_t r) {
+        switch (r) {
+            case 200: return "Signal lost";
+            case 201: return "Router not found";
+            case 202: return "Wrong password";
+            case 203: return "Association failed";
+            default:  return "Connection error";
+        }
+    }
+
+    static esp_err_t provision_status_handler(httpd_req_t *req)
+    {
+        std::string target = sIsFallback ? Config::NetworkConfig::GetWifiSSID() : "";
+        int retry  = Helpers::NetworkHelpers::GetWifiRetryCount();
+        uint8_t reason = Helpers::NetworkHelpers::GetLastDisconnectReason();
+        int remaining  = Helpers::NetworkHelpers::GetApTimeoutRemainingS();
+
+        char buf[256];
+        snprintf(buf, sizeof(buf),
+            "{\"mode\":\"%s\",\"target_ssid\":\"%s\","
+            "\"retry_count\":%d,\"last_reason\":%d,\"last_reason_text\":\"%s\","
+            "\"ap_timeout_remaining_s\":%d}",
+            sIsFallback ? "fallback" : "provisioning",
+            target.c_str(),
+            retry,
+            (int)reason,
+            wifi_reason_text(reason),
+            remaining);
+
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, buf, HTTPD_RESP_USE_STRLEN);
+        return ESP_OK;
+    }
+
+    static const char FALLBACK_BANNER[] =
+        "<div style=\"background:#fff3e0;border:1px solid #ffb300;border-radius:4px;"
+        "padding:10px;margin-bottom:16px\" id=\"status-banner\">"
+        "<strong>&#9888; Connection lost</strong><br>"
+        "Trying to reconnect to <strong id=\"target-ssid\">...</strong>&hellip;"
+        " Attempt <span id=\"attempt-count\">?</span>.<br>"
+        "<small>The device reconnects automatically when the router is available."
+        " Use the form below only if credentials have changed.</small>"
+        "</div>"
+        "<script>"
+        "function refreshStatus(){"
+        "fetch('/status').then(r=>r.json()).then(d=>{"
+        "document.getElementById('target-ssid').textContent=d.target_ssid||'?';"
+        "document.getElementById('attempt-count').textContent=d.retry_count||'?';"
+        "});}"
+        "refreshStatus();setInterval(refreshStatus,5000);"
+        "</script>";
+
     static esp_err_t provision_get_handler(httpd_req_t *req)
     {
         httpd_resp_set_type(req, "text/html");
-        httpd_resp_send(req, PROVISION_HTML, HTTPD_RESP_USE_STRLEN);
+        if (!sIsFallback) {
+            httpd_resp_send(req, PROVISION_HTML, HTTPD_RESP_USE_STRLEN);
+            return ESP_OK;
+        }
+        // Fallback mode: inject banner before the form
+        // Send HTML in two parts: head+open-body, then banner, then rest of form
+        static const char SPLIT_MARKER[] = "<body>";
+        const char *split = strstr(PROVISION_HTML, SPLIT_MARKER);
+        if (!split) {
+            httpd_resp_send(req, PROVISION_HTML, HTTPD_RESP_USE_STRLEN);
+            return ESP_OK;
+        }
+        size_t head_len = split - PROVISION_HTML + strlen(SPLIT_MARKER);
+        httpd_resp_send_chunk(req, PROVISION_HTML, head_len);
+        httpd_resp_send_chunk(req, FALLBACK_BANNER, HTTPD_RESP_USE_STRLEN);
+        httpd_resp_send_chunk(req, PROVISION_HTML + head_len, HTTPD_RESP_USE_STRLEN);
+        httpd_resp_send_chunk(req, nullptr, 0);
         return ESP_OK;
     }
 
@@ -274,12 +353,19 @@ namespace Helpers
         return ESP_OK;
     }
 
-    void WifiProvision::StartProvisionServer()
+    void WifiProvision::StartProvisionServer(bool isFallback)
     {
+        sIsFallback = isFallback;
         httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-        config.stack_size      = 6144;  // extra for scan JSON building
-        config.max_uri_handlers = 4;
-        config.task_priority   = tskIDLE_PRIORITY + 2;
+        config.stack_size       = 6144;
+        config.max_uri_handlers = 5;
+        config.task_priority    = tskIDLE_PRIORITY + 2;
+        // In fallback mode the main web server already owns port 80 and the default
+        // ctrl socket port (32768); use different values for both to avoid conflict.
+        if (isFallback) {
+            config.server_port = 8081;
+            config.ctrl_port   = 32769;
+        }
 
         httpd_handle_t server = nullptr;
         if (httpd_start(&server, &config) != ESP_OK) {
@@ -302,9 +388,15 @@ namespace Helpers
         get_scan.method  = HTTP_GET;
         get_scan.handler = provision_scan_handler;
 
+        httpd_uri_t get_status = {};
+        get_status.uri     = "/status";
+        get_status.method  = HTTP_GET;
+        get_status.handler = provision_status_handler;
+
         httpd_register_uri_handler(server, &get_root);
         httpd_register_uri_handler(server, &get_scan);
         httpd_register_uri_handler(server, &post_connect);
+        httpd_register_uri_handler(server, &get_status);
         httpd_register_err_handler(server, HTTPD_404_NOT_FOUND, provision_404_handler);
 
         ESP_LOGI(TAG, "Provisioning HTTP server started");

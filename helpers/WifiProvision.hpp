@@ -8,7 +8,7 @@ namespace Helpers
     {
     public:
         static void StartAP();
-        static void StartProvisionServer();
+        static void StartProvisionServer(bool isFallback = false);
         static void StartDnsServer();
     };
 }

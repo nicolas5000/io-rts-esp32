@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 namespace Helpers
 {
@@ -11,6 +12,18 @@ namespace Helpers
         /// @brief Get current connection status
         /// @return true if currently connected to network, false otherwise
         static bool isConnected();
+
+        static int GetWifiRetryCount();
+        static uint8_t GetLastDisconnectReason();
+        static int GetApTimeoutRemainingS();
     };
+
+    // Free functions for fallback AP runtime config — callable from web_server.cpp
+    bool     NetworkHelpers_GetFallbackEnabled();
+    int      NetworkHelpers_GetRetriesBoot();
+    int      NetworkHelpers_GetRetriesRunning();
+    uint32_t NetworkHelpers_GetApTimeoutS();
+    bool     NetworkHelpers_IsFallbackApRunning();
+    void     NetworkHelpers_SetFallbackConfig(bool enabled, int rb, int rr, uint32_t tmo);
 
 }

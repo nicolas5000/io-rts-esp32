@@ -155,6 +155,42 @@
                     </div>
                 </section>
 
+                <section id="wifi-network-section">
+                    <div class="title">
+                        <h2>WiFi Network</h2>
+                    </div>
+                    <div class="card">
+                        <label for="wifi-ssid">SSID:</label>
+                        <input type="text" id="wifi-ssid" placeholder="Network name" maxlength="32">
+                        <label for="wifi-password">Password:</label>
+                        <input type="password" id="wifi-password" placeholder="Leave blank to keep current">
+                        <small style="color:#888;margin-top:-4px;display:block;">Leave blank to keep the current password.</small>
+                        <p style="color:#e67e22;font-size:0.9em;margin:8px 0 4px;">⚠ The device will restart after saving.</p>
+                        <div id="wifi-config-status" style="font-size:0.9em;margin-bottom:6px;min-height:1em;"></div>
+                        <button id="wifi-config-save">Save</button>
+                    </div>
+                </section>
+
+                <section id="wifi-fallback-section">
+                    <div class="title">
+                        <h2>WiFi Fallback AP</h2>
+                    </div>
+                    <div class="card">
+                        <label style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+                            <input type="checkbox" id="fallback-enabled">
+                            Enable fallback AP when connection is lost
+                        </label>
+                        <label for="fallback-retries-boot">Retries before AP (fresh boot):</label>
+                        <input type="number" id="fallback-retries-boot" min="1" max="20" placeholder="3">
+                        <label for="fallback-retries-running">Retries before AP (after dropout):</label>
+                        <input type="number" id="fallback-retries-running" min="1" max="20" placeholder="3">
+                        <label for="fallback-timeout">AP auto-shutdown (seconds, 0=off):</label>
+                        <input type="number" id="fallback-timeout" min="0" max="3600" placeholder="600">
+                        <div id="fallback-status" style="margin:8px 0;font-size:0.9em;color:#888;">Loading…</div>
+                        <button id="fallback-save">Save</button>
+                    </div>
+                </section>
+
                 <section id="ota-section">
                     <div class="title">
                         <h2>Firmware Update</h2>

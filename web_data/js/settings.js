@@ -334,6 +334,67 @@
 
         initIoKey(app);
 
+        // WiFi scan
+        (function () {
+            var scanBtn     = document.getElementById("wifi-scan-btn");
+            var scanResults = document.getElementById("wifi-scan-results");
+            var ssidInput   = app.elements.wifiSsidInput;
+            if (!scanBtn) return;
+
+            function rssiToBar(rssi) {
+                if (rssi >= -55) return "▂▄▆█";
+                if (rssi >= -70) return "▂▄▆&nbsp;";
+                if (rssi >= -80) return "▂▄&nbsp;&nbsp;";
+                return "▂&nbsp;&nbsp;&nbsp;";
+            }
+
+            scanBtn.addEventListener("click", function () {
+                scanBtn.disabled = true;
+                scanBtn.textContent = "Scanning…";
+                scanResults.style.display = "none";
+                scanResults.innerHTML = "";
+
+                fetch("/api/wifi/scan?" + Date.now(), { cache: "no-store" })
+                    .then(function (r) { return r.json(); })
+                    .then(function (networks) {
+                        if (!networks.length) {
+                            scanResults.innerHTML = "<div style='padding:8px;color:#888;font-size:.9em;'>No networks found.</div>";
+                            scanResults.style.display = "block";
+                            return;
+                        }
+                        networks.forEach(function (net) {
+                            var row = document.createElement("div");
+                            row.style.cssText = "display:flex;justify-content:space-between;align-items:center;padding:8px 10px;cursor:pointer;border-bottom:1px solid #eee;font-size:.9em;";
+                            row.innerHTML = "<span>" + net.ssid + "</span>"
+                                + "<span style='font-family:monospace;color:#888;font-size:.85em;'>" + rssiToBar(net.rssi) + " " + net.rssi + " dBm</span>";
+                            row.addEventListener("mouseenter", function () { row.style.background = "var(--color-accent2,#eef)"; });
+                            row.addEventListener("mouseleave", function () { row.style.background = ""; });
+                            row.addEventListener("click", function () {
+                                ssidInput.value = net.ssid;
+                                scanResults.style.display = "none";
+                            });
+                            scanResults.appendChild(row);
+                        });
+                        scanResults.style.display = "block";
+                    })
+                    .catch(function () {
+                        scanResults.innerHTML = "<div style='padding:8px;color:red;font-size:.9em;'>Scan failed.</div>";
+                        scanResults.style.display = "block";
+                    })
+                    .finally(function () {
+                        scanBtn.disabled = false;
+                        scanBtn.textContent = "Scan";
+                    });
+            });
+
+            // Close results when clicking outside
+            document.addEventListener("click", function (e) {
+                if (!scanResults.contains(e.target) && e.target !== scanBtn) {
+                    scanResults.style.display = "none";
+                }
+            });
+        })();
+
         app.loadMqttConfig = function () { return loadMqttConfig(app); };
         app.updateMqttConfig = function () { return updateMqttConfig(app); };
         app.uploadDevices = function () {

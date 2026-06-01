@@ -1,5 +1,4 @@
 (function () {
-    var STORAGE_KEY = "ota_key";
     var POLL_INTERVAL = 2000;
     var POLL_TIMEOUT = 60000;
 
@@ -34,12 +33,11 @@
 
     function uploadFirmware(app) {
         var file = app.elements.otaFileInput.files[0];
-        var key = app.elements.otaKeyInput.value.trim();
+        var keyDisplay = document.getElementById("ota-key-display");
+        var key = keyDisplay ? keyDisplay.value.trim() : "";
 
         if (!file) { setStatus(app, "Please select a firmware .bin file.", "red"); return; }
-        if (!key)  { setStatus(app, "Please enter the OTA key.", "red"); return; }
-
-        localStorage.setItem(STORAGE_KEY, key);
+        if (!key)  { setStatus(app, "OTA key not loaded yet.", "red"); return; }
 
         app.elements.otaUploadButton.disabled = true;
         app.elements.otaProgress.style.display = "";
@@ -78,34 +76,173 @@
         xhr.send(file);
     }
 
-    function init(app) {
-        var saved = localStorage.getItem(STORAGE_KEY);
-        if (saved && app.elements.otaKeyInput) {
-            app.elements.otaKeyInput.value = saved;
+    function fetchAndDisplayKey() {
+        var display = document.getElementById("ota-key-display");
+        if (!display) return;
+        fetch("/api/ota/key?" + Date.now(), { cache: "no-store" })
+            .then(function (r) { return r.json(); })
+            .then(function (d) {
+                if (d.key) display.value = d.key;
+            })
+            .catch(function () {});
+    }
+
+    function initKeyModal() {
+        var modal    = document.getElementById("ota-key-modal");
+        var editBtn  = document.getElementById("ota-key-edit");
+        var cancelBtn= document.getElementById("ota-key-cancel");
+        var confirmBtn=document.getElementById("ota-key-confirm");
+        var newInput = document.getElementById("ota-key-new");
+        var status   = document.getElementById("ota-key-modal-status");
+
+        if (!modal || !editBtn) return;
+
+        function openModal() {
+            newInput.value = "";
+            status.textContent = "";
+            status.style.color = "";
+            modal.style.display = "flex";
+            newInput.focus();
         }
-        if (app.elements.otaKeyInput) {
-            app.elements.otaKeyInput.addEventListener("input", function () {
-                localStorage.setItem(STORAGE_KEY, app.elements.otaKeyInput.value.trim());
+
+        function closeModal() {
+            modal.style.display = "none";
+        }
+
+        editBtn.addEventListener("click", openModal);
+        cancelBtn.addEventListener("click", closeModal);
+
+        modal.addEventListener("click", function (e) {
+            if (e.target === modal) closeModal();
+        });
+
+        confirmBtn.addEventListener("click", function () {
+            var newKey = newInput.value.trim();
+            if (!newKey) {
+                status.textContent = "Please enter a key.";
+                status.style.color = "red";
+                return;
+            }
+            confirmBtn.disabled = true;
+            status.textContent = "Saving…";
+            status.style.color = "";
+
+            fetch("/api/ota/key", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ key: newKey })
+            })
+            .then(function (r) { return r.json(); })
+            .then(function (d) {
+                if (d.ok) {
+                    status.textContent = "Key updated.";
+                    status.style.color = "green";
+                    var display = document.getElementById("ota-key-display");
+                    if (display) display.value = newKey;
+                    setTimeout(closeModal, 1200);
+                } else {
+                    status.textContent = "Error: " + (d.msg || "unknown");
+                    status.style.color = "red";
+                }
+            })
+            .catch(function () {
+                status.textContent = "Network error.";
+                status.style.color = "red";
+            })
+            .finally(function () {
+                confirmBtn.disabled = false;
             });
+        });
+    }
+
+    function fetchAndDisplayIoKey() {
+        var display = document.getElementById("io-key-display");
+        if (!display) return;
+        fetch("/api/io/key?" + Date.now(), { cache: "no-store" })
+            .then(function (r) { return r.json(); })
+            .then(function (d) {
+                if (d.key) display.value = d.key;
+            })
+            .catch(function () {});
+    }
+
+    function initIoKeyModal() {
+        var modal     = document.getElementById("io-key-modal");
+        var editBtn   = document.getElementById("io-key-edit");
+        var cancelBtn = document.getElementById("io-key-cancel");
+        var confirmBtn= document.getElementById("io-key-confirm");
+        var newInput  = document.getElementById("io-key-new");
+        var status    = document.getElementById("io-key-modal-status");
+
+        if (!modal || !editBtn) return;
+
+        function openModal() {
+            newInput.value = "";
+            status.textContent = "";
+            status.style.color = "";
+            modal.style.display = "flex";
+            newInput.focus();
         }
+
+        function closeModal() {
+            modal.style.display = "none";
+        }
+
+        editBtn.addEventListener("click", openModal);
+        cancelBtn.addEventListener("click", closeModal);
+        modal.addEventListener("click", function (e) {
+            if (e.target === modal) closeModal();
+        });
+
+        confirmBtn.addEventListener("click", function () {
+            var newKey = newInput.value.trim().toUpperCase();
+            if (newKey.length !== 32) {
+                status.textContent = "Key must be exactly 32 hex characters.";
+                status.style.color = "red";
+                return;
+            }
+            confirmBtn.disabled = true;
+            status.textContent = "Saving…";
+            status.style.color = "";
+
+            fetch("/api/io/key", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ key: newKey })
+            })
+            .then(function (r) { return r.json(); })
+            .then(function (d) {
+                if (d.ok) {
+                    status.textContent = "Key saved. Reboot the device to apply.";
+                    status.style.color = "green";
+                    var display = document.getElementById("io-key-display");
+                    if (display) display.value = newKey;
+                    setTimeout(closeModal, 2500);
+                } else {
+                    status.textContent = "Error: " + (d.msg || "unknown");
+                    status.style.color = "red";
+                }
+            })
+            .catch(function () {
+                status.textContent = "Network error.";
+                status.style.color = "red";
+            })
+            .finally(function () {
+                confirmBtn.disabled = false;
+            });
+        });
+    }
+
+    function init(app) {
+        fetchAndDisplayKey();
+        initKeyModal();
+        fetchAndDisplayIoKey();
+        initIoKeyModal();
+
         if (app.elements.otaProgress) {
             app.elements.otaProgress.style.display = "none";
         }
-        var showKeyBtn = document.getElementById("ota-show-key");
-        if (showKeyBtn) {
-            showKeyBtn.addEventListener("click", function () {
-                fetch("/api/ota/key?" + Date.now(), { cache: "no-store" })
-                    .then(function (r) { return r.json(); })
-                    .then(function (d) {
-                        if (d.key && app.elements.otaKeyInput) {
-                            app.elements.otaKeyInput.value = d.key;
-                            app.elements.otaKeyInput.type = "text";
-                            localStorage.setItem(STORAGE_KEY, d.key);
-                        }
-                    })
-                    .catch(function () { app.logStatus("Could not fetch OTA key.", "error"); });
-            });
-        }
+
         app.uploadFirmware = function () { uploadFirmware(app); };
     }
 

@@ -87,7 +87,7 @@
             syslogFacilityInput: document.getElementById("syslog-facility"),
             syslogMinLevelInput: document.getElementById("syslog-min-level"),
             syslogUpdateButton: document.getElementById("syslog-update"),
-            otaKeyInput: document.getElementById("ota-key"),
+            otaKeyInput: document.getElementById("ota-key-display"),
             otaFileInput: document.getElementById("ota-file"),
             otaUploadButton: document.getElementById("ota-upload"),
             otaProgress: document.getElementById("ota-progress"),

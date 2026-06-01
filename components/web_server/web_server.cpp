@@ -28,6 +28,7 @@
 
 #ifdef CONFIG_CONNECTIVITY_CHOICE_WIFI
 #include "NetworkHelpers.hpp"
+#include "esp_wifi.h"
 #endif
 
 #include "IoRtsManager.hpp"
@@ -790,6 +791,38 @@ static esp_err_t api_wifi_fallback_post(httpd_req_t *req)
     send_json(req, resp);
     return ESP_OK;
 }
+
+// ─── GET /api/wifi/scan ─────────────────────────────────────────────────────
+
+static esp_err_t api_wifi_scan_get(httpd_req_t *req)
+{
+    wifi_scan_config_t scan_cfg = {};
+    scan_cfg.scan_type = WIFI_SCAN_TYPE_PASSIVE;
+    esp_wifi_scan_start(&scan_cfg, true); // blocking
+
+    uint16_t ap_count = 0;
+    esp_wifi_scan_get_ap_num(&ap_count);
+    if (ap_count > 30) ap_count = 30;
+
+    cJSON *arr = cJSON_CreateArray();
+    if (ap_count > 0) {
+        wifi_ap_record_t *records = new wifi_ap_record_t[ap_count];
+        esp_wifi_scan_get_ap_records(&ap_count, records);
+        for (uint16_t i = 0; i < ap_count; i++) {
+            const char *ssid = (const char *)records[i].ssid;
+            if (!ssid[0]) continue; // skip hidden
+            cJSON *entry = cJSON_CreateObject();
+            cJSON_AddStringToObject(entry, "ssid", ssid);
+            cJSON_AddNumberToObject(entry, "rssi", records[i].rssi);
+            cJSON_AddNumberToObject(entry, "auth", records[i].authmode);
+            cJSON_AddItemToArray(arr, entry);
+        }
+        delete[] records;
+    }
+
+    send_json(req, arr);
+    return ESP_OK;
+}
 #endif // CONFIG_CONNECTIVITY_CHOICE_WIFI
 
 // ─── GET /api/ota/key ───────────────────────────────────────────────────────
@@ -799,6 +832,43 @@ static esp_err_t api_ota_key_get(httpd_req_t *req)
     cJSON *obj = cJSON_CreateObject();
     cJSON_AddStringToObject(obj, "key", s_ota_key);
     send_json(req, obj);
+    return ESP_OK;
+}
+
+// ─── POST /api/ota/key ──────────────────────────────────────────────────────
+
+static esp_err_t api_ota_key_post(httpd_req_t *req)
+{
+    char *body = nullptr;
+    if (read_body(req, &body) != ESP_OK) {
+        send_result(req, false, "Failed to read body");
+        return ESP_OK;
+    }
+
+    cJSON *json = cJSON_Parse(body);
+    free(body);
+    if (!json) { send_result(req, false, "Invalid JSON"); return ESP_OK; }
+
+    cJSON *jKey = cJSON_GetObjectItem(json, "key");
+    if (!cJSON_IsString(jKey) || jKey->valuestring[0] == '\0') {
+        cJSON_Delete(json);
+        send_result(req, false, "Missing or empty key");
+        return ESP_OK;
+    }
+
+    strncpy(s_ota_key, jKey->valuestring, OTA_KEY_LEN);
+    s_ota_key[OTA_KEY_LEN] = '\0';
+    cJSON_Delete(json);
+
+    nvs_handle_t h;
+    if (nvs_open("ota", NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_str(h, "api_key", s_ota_key);
+        nvs_commit(h);
+        nvs_close(h);
+        ESP_LOGI(TAG, "OTA key updated via web");
+    }
+
+    send_result(req, true, "OTA key updated");
     return ESP_OK;
 }
 
@@ -960,6 +1030,7 @@ static esp_err_t api_io_key_post(httpd_req_t *req)
     esp_err_t err = Config::IoHomeConfig::SetIoSystemKey(jKey->valuestring);
     cJSON_Delete(json);
     if (err != ESP_OK) { send_result(req, false, "Failed to save key"); return ESP_OK; }
+    ESP_LOGI(TAG, "IO system key updated via web — reboot required");
     send_result(req, true, "IO system key saved — reboot to apply");
     return ESP_OK;
 }
@@ -1493,6 +1564,7 @@ void web_server_start(void *ioRtsManager)
     reg("/api/upload/remotes",    HTTP_POST, api_upload_remotes);
     reg("/api/ota",               HTTP_POST, api_ota_post);
     reg("/api/ota/key",           HTTP_GET,  api_ota_key_get);
+    reg("/api/ota/key",           HTTP_POST, api_ota_key_post);
     reg("/api/io/key",            HTTP_GET,  api_io_key_get);
     reg("/api/io/key",            HTTP_POST, api_io_key_post);
     reg("/api/io/sniff",          HTTP_GET,  api_io_sniff_get);
@@ -1502,6 +1574,7 @@ void web_server_start(void *ioRtsManager)
 #ifdef CONFIG_CONNECTIVITY_CHOICE_WIFI
     reg("/api/wifi/fallback",     HTTP_GET,  api_wifi_fallback_get);
     reg("/api/wifi/fallback",     HTTP_POST, api_wifi_fallback_post);
+    reg("/api/wifi/scan",         HTTP_GET,  api_wifi_scan_get);
 #endif
     reg("/api/info",              HTTP_GET,  api_info_get);
     reg("/api/upload/web*",       HTTP_POST, api_upload_web_post);

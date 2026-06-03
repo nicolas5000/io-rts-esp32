@@ -120,7 +120,7 @@ static int do_configwifi_cmd(int argc, char **argv)
 void register_configwifi(void)
 {
     configwifi_args.read = arg_lit0("r", "read", "Read current configuration from storage (no other argument required)");
-    configwifi_args.del = arg_lit0("d", "delete", "Delete current configuration in storage (no other argument required)");
+    configwifi_args.del = arg_lit0("d", "delete", "Delete current configuration in storage — device enters provisioning AP on next boot");
     configwifi_args.ssid = arg_str0(NULL, "ssid", "<SSID>", "Wifi SSID");
     configwifi_args.pwd = arg_str0(NULL, "pwd", "<password>", "Wifi password");
     configwifi_args.saemode = arg_int0(NULL, "saemode", "<SAE mode>", "Integer value: 1 = HUNT AND PECK, 2 = H2E, 3 = BOTH");

@@ -26,10 +26,15 @@
 #include "DeviceStorage.hpp"
 #include "syslog.h"
 
+#ifdef CONFIG_CONNECTIVITY_CHOICE_WIFI
+#include "NetworkHelpers.hpp"
+#endif
+
 #include "IoRtsManager.hpp"
 #include "iohome_device.hpp"
 #include "MqttConfig.hpp"
 #include "SyslogConfig.hpp"
+#include "NetworkConfig.hpp"
 
 #if CONFIG_WEB_ENABLED
 
@@ -667,6 +672,125 @@ static bool ota_check_key(httpd_req_t *req)
     return ok;
 }
 
+// ─── GET /api/wifi/config ───────────────────────────────────────────────────
+// Returns the currently stored SSID. Password is never returned for security.
+
+static esp_err_t api_wifi_config_get(httpd_req_t *req)
+{
+    cJSON *obj = cJSON_CreateObject();
+    cJSON_AddStringToObject(obj, "ssid", Config::NetworkConfig::GetWifiSSID().c_str());
+    send_json(req, obj);
+    return ESP_OK;
+}
+
+// ─── POST /api/wifi/config ──────────────────────────────────────────────────
+// Accepts {"ssid":"...","password":"..."} — saves to NVS, reboots.
+// Password may be omitted to keep the existing one.
+
+static esp_err_t api_wifi_config_post(httpd_req_t *req)
+{
+    char body[256] = {};
+    int len = httpd_req_recv(req, body, sizeof(body) - 1);
+    if (len <= 0) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Empty body"); return ESP_OK; }
+
+    cJSON *root = cJSON_ParseWithLength(body, len);
+    if (!root) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON"); return ESP_OK; }
+
+    cJSON *ssidItem = cJSON_GetObjectItem(root, "ssid");
+    cJSON *pwdItem  = cJSON_GetObjectItem(root, "password");
+
+    if (!ssidItem || !cJSON_IsString(ssidItem) || strlen(ssidItem->valuestring) == 0) {
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing or empty ssid");
+        return ESP_OK;
+    }
+
+    Config::NetworkConfig::SetWifiSSID(ssidItem->valuestring);
+    if (pwdItem && cJSON_IsString(pwdItem))
+        Config::NetworkConfig::SetWifiPassword(pwdItem->valuestring);
+
+    ESP_LOGI(TAG, "WiFi config updated to SSID=%s — rebooting", ssidItem->valuestring);
+    cJSON_Delete(root);
+
+    httpd_resp_sendstr(req, "{\"status\":\"restarting\"}");
+    esp_timer_handle_t t;
+    esp_timer_create_args_t ta = {};
+    ta.callback = [](void *){ esp_restart(); };
+    ta.name = "wifi_cfg";
+    if (esp_timer_create(&ta, &t) == ESP_OK)
+        esp_timer_start_once(t, 500 * 1000);
+    else
+        esp_restart();
+    return ESP_OK;
+}
+
+// ─── GET /api/wifi/fallback ─────────────────────────────────────────────────
+
+#ifdef CONFIG_CONNECTIVITY_CHOICE_WIFI
+static esp_err_t api_wifi_fallback_get(httpd_req_t *req)
+{
+    cJSON *obj = cJSON_CreateObject();
+    cJSON_AddBoolToObject(obj, "enabled",         Helpers::NetworkHelpers_GetFallbackEnabled());
+    cJSON_AddNumberToObject(obj, "retries_boot",   Helpers::NetworkHelpers_GetRetriesBoot());
+    cJSON_AddNumberToObject(obj, "retries_running",Helpers::NetworkHelpers_GetRetriesRunning());
+    cJSON_AddNumberToObject(obj, "ap_timeout_s",   Helpers::NetworkHelpers_GetApTimeoutS());
+    cJSON_AddBoolToObject(obj, "ap_running",       Helpers::NetworkHelpers_IsFallbackApRunning());
+    cJSON_AddBoolToObject(obj, "connected",        Helpers::NetworkHelpers::isConnected());
+    send_json(req, obj);
+    return ESP_OK;
+}
+
+// ─── POST /api/wifi/fallback ────────────────────────────────────────────────
+
+static esp_err_t api_wifi_fallback_post(httpd_req_t *req)
+{
+    char body[256] = {};
+    int len = httpd_req_recv(req, body, sizeof(body) - 1);
+    if (len <= 0) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Empty body"); return ESP_OK; }
+
+    cJSON *root = cJSON_ParseWithLength(body, len);
+    if (!root) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON"); return ESP_OK; }
+
+    bool     enabled = Helpers::NetworkHelpers_GetFallbackEnabled();
+    int      rb      = Helpers::NetworkHelpers_GetRetriesBoot();
+    int      rr      = Helpers::NetworkHelpers_GetRetriesRunning();
+    uint32_t tmo     = Helpers::NetworkHelpers_GetApTimeoutS();
+
+    cJSON *item;
+    if ((item = cJSON_GetObjectItem(root, "enabled"))          && cJSON_IsBool(item))   enabled = cJSON_IsTrue(item);
+    if ((item = cJSON_GetObjectItem(root, "retries_boot"))     && cJSON_IsNumber(item)) rb  = (int)item->valuedouble;
+    if ((item = cJSON_GetObjectItem(root, "retries_running"))  && cJSON_IsNumber(item)) rr  = (int)item->valuedouble;
+    if ((item = cJSON_GetObjectItem(root, "ap_timeout_s"))     && cJSON_IsNumber(item)) tmo = (uint32_t)item->valuedouble;
+    cJSON_Delete(root);
+
+    // Clamp to valid ranges
+    if (rb  < 1)    rb  = 1;
+    if (rb  > 20)   rb  = 20;
+    if (rr  < 1)    rr  = 1;
+    if (rr  > 20)   rr  = 20;
+    if (tmo > 3600) tmo = 3600;
+
+    // Apply immediately
+    Helpers::NetworkHelpers_SetFallbackConfig(enabled, rb, rr, tmo);
+
+    // Persist to NVS
+    nvs_handle_t h;
+    if (nvs_open("wifi_fb", NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_u8(h, "enabled",      enabled ? 1 : 0);
+        nvs_set_i32(h, "retries_boot", rb);
+        nvs_set_i32(h, "retries_run",  rr);
+        nvs_set_u32(h, "ap_timeout_s", tmo);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddBoolToObject(resp, "ok", true);
+    send_json(req, resp);
+    return ESP_OK;
+}
+#endif // CONFIG_CONNECTIVITY_CHOICE_WIFI
+
 // ─── GET /api/ota/key ───────────────────────────────────────────────────────
 
 static esp_err_t api_ota_key_get(httpd_req_t *req)
@@ -1245,7 +1369,7 @@ void web_server_start(void *ioRtsManager)
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.stack_size = 8192;
     config.task_priority = tskIDLE_PRIORITY + 3; // below radio (8), IO processing (6), status updates (4)
-    config.max_uri_handlers = 25;
+    config.max_uri_handlers = 30;
     config.max_open_sockets = 13; // browser opens many parallel connections for static files + WS
     config.uri_match_fn = httpd_uri_match_wildcard;
     config.enable_so_linger = false;
@@ -1290,6 +1414,12 @@ void web_server_start(void *ioRtsManager)
     reg("/api/upload/remotes",    HTTP_POST, api_upload_remotes);
     reg("/api/ota",               HTTP_POST, api_ota_post);
     reg("/api/ota/key",           HTTP_GET,  api_ota_key_get);
+    reg("/api/wifi/config",       HTTP_GET,  api_wifi_config_get);
+    reg("/api/wifi/config",       HTTP_POST, api_wifi_config_post);
+#ifdef CONFIG_CONNECTIVITY_CHOICE_WIFI
+    reg("/api/wifi/fallback",     HTTP_GET,  api_wifi_fallback_get);
+    reg("/api/wifi/fallback",     HTTP_POST, api_wifi_fallback_post);
+#endif
     reg("/api/info",              HTTP_GET,  api_info_get);
     reg("/api/upload/web*",       HTTP_POST, api_upload_web_post);
     reg("/api/pair/start",        HTTP_POST, api_pair_start_post);

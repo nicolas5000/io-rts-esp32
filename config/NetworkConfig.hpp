@@ -91,6 +91,10 @@ namespace Config
 
 #ifdef CONFIG_CONNECTIVITY_CHOICE_WIFI
 
+        /// @brief Check whether WiFi credentials (SSID) have been stored in NVS
+        /// @return true if a non-empty SSID exists in NVS, false otherwise
+        static bool HasWifiCredentials();
+
         /// @brief Delete all Wifi configuration in storage
         static void DeleteWifiConfig();
 

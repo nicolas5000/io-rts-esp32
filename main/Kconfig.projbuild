@@ -138,6 +138,57 @@ menu "IO RTS Project Configuration"
             config ESP_WIFI_AUTH_WPA3_PSK
                 bool "WPA3 PSK"
         endchoice
+
+    endmenu
+
+    menu "WiFi Fallback AP"
+        depends on CONNECTIVITY_CHOICE_WIFI
+
+        config WIFI_FALLBACK_AP_ENABLED
+            bool "Enable fallback AP when connection is lost"
+            default y
+            help
+                When enabled, a password-protected soft-AP (io-rts-setup) starts in APSTA mode
+                after repeated connection failures. The STA continues retrying the home router
+                in the background; when it reconnects the AP shuts down automatically.
+
+        config WIFI_FALLBACK_AP_RETRIES_BOOT
+            int "Retries before AP starts on fresh boot (no prior connection)"
+            depends on WIFI_FALLBACK_AP_ENABLED
+            range 1 20
+            default 3
+            help
+                Number of consecutive STA failures at boot before the fallback AP starts.
+
+        config WIFI_FALLBACK_AP_RETRIES_RUNNING
+            int "Retries before AP starts after a connection is lost"
+            depends on WIFI_FALLBACK_AP_ENABLED
+            range 1 20
+            default 3
+            help
+                Number of consecutive failures after a previously successful connection before
+                the AP starts. Avoids the AP flickering on/off during brief dropouts.
+
+        config WIFI_FALLBACK_AP_TIMEOUT_S
+            int "Fallback AP auto-shutdown timeout in seconds (0 = never)"
+            depends on WIFI_FALLBACK_AP_ENABLED
+            range 0 3600
+            default 600
+
+        config WIFI_RESET_GPIO
+            int "WiFi credential reset GPIO (-1 to disable)"
+            range -1 48
+            default -1
+            help
+                GPIO held LOW for WIFI_RESET_GPIO_HOLD_S seconds wipes credentials and restarts.
+                Configured as INPUT with internal pull-up; connect to GND to activate.
+
+        config WIFI_RESET_GPIO_HOLD_S
+            int "Hold time for credential reset (seconds)"
+            depends on WIFI_RESET_GPIO >= 0
+            range 3 30
+            default 5
+
     endmenu
 
     menu "Ethernet Configuration"

@@ -1,4 +1,4 @@
-idf_component_register(SRCS "main.cpp" "IoRtsManager.cpp" "../io-homecontrol/IoHomeControl.cpp" "../io-homecontrol/protocol/iohome_commands.cpp"
+idf_component_register(SRCS "main.cpp" "IoRtsManager.cpp" "../helpers/WifiProvision.cpp" "../io-homecontrol/IoHomeControl.cpp" "../io-homecontrol/protocol/iohome_commands.cpp"
                         "../io-homecontrol/protocol/iohome_crypto.cpp" "../io-homecontrol/protocol/iohome_frame.cpp" "../io-homecontrol/protocol/iohome_device.cpp"
                         "../io-homecontrol/radio/RadioSX1276.cpp" "../helpers/NvsHelpers.cpp" "../helpers/NetworkHelpers.cpp" "../helpers/MqttHelpers.cpp"
                         "../helpers/DeviceStorage.cpp" "../helpers/EncodingHelpers.cpp" "../config/MiscConfig.cpp"

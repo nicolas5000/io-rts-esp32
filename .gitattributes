@@ -1,6 +1,9 @@
 # Enforce LF line endings for all text files
 * text=auto eol=lf
 
+# Keep upstream io-homecontrol files untouched
+io-homecontrol/** -text
+
 # Explicitly set binary files to avoid mangling
 *.png binary
 *.jpg binary

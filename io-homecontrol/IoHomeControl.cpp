@@ -746,7 +746,11 @@ namespace iohome
                 reqOk = create_getstatus03_tilt_request(request, mOwnNodeId, it->second.info.node_id);
               else
                 reqOk = create_getstatus03_request(request, mOwnNodeId, it->second.info.node_id);
-              if (reqOk && SendAndReceive(request, response, FREQUENCY_CHANNEL_2))
+              UBaseType_t currentPriority = uxTaskPriorityGet(NULL);
+              vTaskPrioritySet(NULL, IO_FRAME_PROCESSING_TASK);
+              bool exchangeOk = reqOk && SendAndReceive(request, response, FREQUENCY_CHANNEL_2);
+              vTaskPrioritySet(NULL, currentPriority);
+              if (exchangeOk)
               {
                 UpdateDeviceStatus(response);
               }
@@ -1863,7 +1867,9 @@ namespace iohome
       bool ret = false;
       uint8_t expectedResponseID;
       auto devIt = sDeviceMap.find(deviceID);
-      bool is_low_power = (devIt != sDeviceMap.end()) ? devIt->second.info.is_low_power : true;
+      bool is_low_power = (devIt != sDeviceMap.end() && devIt->second.info.device_type != DeviceType::UNKNOWN)
+                            ? devIt->second.info.is_low_power
+                            : true;
       switch (requestID)
       {
       case CMD_GET_NAME:

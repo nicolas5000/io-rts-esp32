@@ -49,6 +49,8 @@
             mqttPasswordInput:    document.getElementById("mqtt-password"),
             mqttPortInput:        document.getElementById("mqtt-port"),
             mqttServerInput:      document.getElementById("mqtt-server"),
+            mqttClientIdInput:    document.getElementById("mqtt-client-id"),
+            mqttTopicInput:       document.getElementById("mqtt-topic"),
             mqttUpdateButton:     document.getElementById("mqtt-update"),
             mqttUserInput:        document.getElementById("mqtt-user"),
             remotePopupButton:    document.getElementById("remote-popup"),

@@ -38,6 +38,7 @@
 #include "SyslogConfig.hpp"
 #include "NetworkConfig.hpp"
 #include "IoHomeConfig.hpp"
+#include "MiscConfig.hpp"
 
 #if CONFIG_WEB_ENABLED
 
@@ -619,12 +620,14 @@ static esp_err_t api_debug_get(httpd_req_t *req)
 static esp_err_t api_mqtt_get(httpd_req_t *req)
 {
     cJSON *obj = cJSON_CreateObject();
-    cJSON_AddStringToObject(obj, "user",      Config::MqttConfig::GetClientUsername().c_str());
-    cJSON_AddStringToObject(obj, "server",    Config::MqttConfig::GetBrokerAddress().c_str());
-    cJSON_AddNumberToObject(obj, "port",      Config::MqttConfig::GetBrokerPort());
-    cJSON_AddStringToObject(obj, "password",  Config::MqttConfig::GetClientPassword().c_str());
-    cJSON_AddStringToObject(obj, "discovery", Config::MqttConfig::GetDiscoveryPrefix().c_str());
-    cJSON_AddBoolToObject(obj, "connected",   s_manager != nullptr && s_manager->GetMqttConnected());
+    cJSON_AddStringToObject(obj, "user",        Config::MqttConfig::GetClientUsername().c_str());
+    cJSON_AddStringToObject(obj, "server",      Config::MqttConfig::GetBrokerAddress().c_str());
+    cJSON_AddNumberToObject(obj, "port",        Config::MqttConfig::GetBrokerPort());
+    cJSON_AddStringToObject(obj, "password",    Config::MqttConfig::GetClientPassword().c_str());
+    cJSON_AddStringToObject(obj, "client_id",   Config::MqttConfig::GetClientId().c_str());
+    cJSON_AddStringToObject(obj, "topic",       Config::MqttConfig::GetTopicPrefix().c_str());
+    cJSON_AddStringToObject(obj, "discovery",   Config::MqttConfig::GetDiscoveryPrefix().c_str());
+    cJSON_AddBoolToObject(obj, "connected",     s_manager != nullptr && s_manager->GetMqttConnected());
     send_json(req, obj);
     return ESP_OK;
 }
@@ -651,12 +654,16 @@ static esp_err_t api_mqtt_post(httpd_req_t *req)
     std::string user      = get_str("user");
     std::string server    = get_str("server");
     std::string password  = get_str("password");
+    std::string client_id = get_str("client_id");
+    std::string topic     = get_str("topic");
     std::string discovery = get_str("discovery");
     cJSON *jPort = cJSON_GetObjectItem(json, "port");
 
     if (!user.empty())      Config::MqttConfig::SetClientUsername(user);
     if (!server.empty())    Config::MqttConfig::SetBrokerAddress(server);
     if (!password.empty())  Config::MqttConfig::SetClientPassword(password);
+    if (!client_id.empty()) Config::MqttConfig::SetClientId(client_id);
+    if (!topic.empty())     Config::MqttConfig::SetTopicPrefix(topic);
     if (!discovery.empty()) Config::MqttConfig::SetDiscoveryPrefix(discovery);
     if (cJSON_IsNumber(jPort))
         Config::MqttConfig::SetBrokerPort((uint16_t)jPort->valuedouble);
@@ -1210,6 +1217,99 @@ static esp_err_t api_io_sniff_post(httpd_req_t *req)
         s_manager->StopKeySniff();
 
     send_result(req, true, activate ? "Sniffing started" : "Sniffing stopped");
+    return ESP_OK;
+}
+
+// ─── GET /api/io/config ─────────────────────────────────────────────────────
+
+static esp_err_t api_io_config_get(httpd_req_t *req)
+{
+    cJSON *obj = cJSON_CreateObject();
+    cJSON_AddStringToObject(obj, "node_id",      Config::IoHomeConfig::GetIoNodeId().c_str());
+    cJSON_AddNumberToObject(obj, "tx_power",     Config::IoHomeConfig::GetTxPower());
+    cJSON_AddBoolToObject(obj,   "passive_mode", Config::IoHomeConfig::isPassiveModeEnabled());
+    send_json(req, obj);
+    return ESP_OK;
+}
+
+// ─── POST /api/io/config ────────────────────────────────────────────────────
+
+static esp_err_t api_io_config_post(httpd_req_t *req)
+{
+    char *body = nullptr;
+    if (read_body(req, &body) != ESP_OK) { send_result(req, false, "Failed to read body"); return ESP_OK; }
+
+    cJSON *json = cJSON_Parse(body);
+    free(body);
+    if (!json) { send_result(req, false, "Invalid JSON"); return ESP_OK; }
+
+    cJSON *jNodeId = cJSON_GetObjectItem(json, "node_id");
+    if (cJSON_IsString(jNodeId)) {
+        std::string id = jNodeId->valuestring;
+        if (id.length() != 6) {
+            cJSON_Delete(json);
+            send_result(req, false, "node_id must be exactly 6 hex characters");
+            return ESP_OK;
+        }
+        Config::IoHomeConfig::SetIoNodeId(id);
+    }
+
+    cJSON *jTx = cJSON_GetObjectItem(json, "tx_power");
+    if (cJSON_IsNumber(jTx)) {
+        int p = (int)jTx->valuedouble;
+        if (p < 0 || p > 20) {
+            cJSON_Delete(json);
+            send_result(req, false, "tx_power must be 0-20");
+            return ESP_OK;
+        }
+        Config::IoHomeConfig::SetTxPower((uint8_t)p);
+    }
+
+    cJSON *jPassive = cJSON_GetObjectItem(json, "passive_mode");
+    if (cJSON_IsBool(jPassive))
+        Config::IoHomeConfig::ActivatePassiveMode(cJSON_IsTrue(jPassive));
+
+    cJSON_Delete(json);
+    send_result(req, true, "IO config saved — reboot to apply");
+    return ESP_OK;
+}
+
+// ─── POST /api/misc/password ────────────────────────────────────────────────
+
+static esp_err_t api_misc_password_post(httpd_req_t *req)
+{
+    char *body = nullptr;
+    if (read_body(req, &body) != ESP_OK) { send_result(req, false, "Failed to read body"); return ESP_OK; }
+
+    cJSON *json = cJSON_Parse(body);
+    free(body);
+    if (!json) { send_result(req, false, "Invalid JSON"); return ESP_OK; }
+
+    cJSON *jPwd = cJSON_GetObjectItem(json, "password");
+    if (!cJSON_IsString(jPwd)) {
+        cJSON_Delete(json);
+        send_result(req, false, "Missing 'password'");
+        return ESP_OK;
+    }
+
+    std::string pwd = jPwd->valuestring;
+    if (pwd.length() > Config::PASSWORD_MAXSIZE) {
+        cJSON_Delete(json);
+        send_result(req, false, "Password too long (max 32 characters)");
+        return ESP_OK;
+    }
+
+    esp_err_t err;
+    if (pwd.empty()) {
+        Config::MiscConfig::ResetAccessPassword();
+        err = ESP_OK;
+    } else {
+        err = Config::MiscConfig::SetAccessPassword(pwd);
+    }
+
+    cJSON_Delete(json);
+    if (err != ESP_OK) { send_result(req, false, "Failed to save password"); return ESP_OK; }
+    send_result(req, true, pwd.empty() ? "Password cleared — reboot to apply" : "Password saved — reboot to apply");
     return ESP_OK;
 }
 
@@ -1825,6 +1925,9 @@ void web_server_start(void *ioRtsManager)
     reg("/api/io/key",            HTTP_POST, api_io_key_post);
     reg("/api/io/sniff",          HTTP_GET,  api_io_sniff_get);
     reg("/api/io/sniff",          HTTP_POST, api_io_sniff_post);
+    reg("/api/io/config",         HTTP_GET,  api_io_config_get);
+    reg("/api/io/config",         HTTP_POST, api_io_config_post);
+    reg("/api/misc/password",     HTTP_POST, api_misc_password_post);
     reg("/api/wifi/config",       HTTP_GET,  api_wifi_config_get);
     reg("/api/wifi/config",       HTTP_POST, api_wifi_config_post);
 #ifdef CONFIG_CONNECTIVITY_CHOICE_WIFI

@@ -105,6 +105,8 @@
             app.elements.mqttServerInput.value    = config.server    || "";
             app.elements.mqttPasswordInput.value  = config.password  || "";
             app.elements.mqttPortInput.value      = config.port      || "";
+            app.elements.mqttClientIdInput.value  = config.client_id || "";
+            app.elements.mqttTopicInput.value     = config.topic     || "";
             app.elements.mqttDiscoveryInput.value = config.discovery || "";
             var statusEl = document.getElementById("mqtt-conn-status");
             if (statusEl) {
@@ -124,6 +126,8 @@
                 server:    app.elements.mqttServerInput.value,
                 password:  app.elements.mqttPasswordInput.value,
                 port:      app.elements.mqttPortInput.value,
+                client_id: app.elements.mqttClientIdInput.value,
+                topic:     app.elements.mqttTopicInput.value,
                 discovery: app.elements.mqttDiscoveryInput.value
             });
             if (!r.success) { showToast(r.message || "MQTT save failed.", "error"); return; }
@@ -144,6 +148,103 @@
         } catch (error) {
             showToast(error.message || "Upload failed.", "error");
         }
+    }
+
+    // ── IO Controller Config ──────────────────────────────────────────────────
+
+    async function loadIoConfig(app) {
+        try {
+            const r = await window.MiOpenApi.requestJson("/api/io/config");
+            app.elements.ioNodeIdInput.value  = (r.node_id  || "").toUpperCase();
+            app.elements.ioTxPowerInput.value = r.tx_power  ?? "";
+            app.elements.ioPassiveModeCheckbox.checked = !!r.passive_mode;
+            app.elements.ioPassiveToggle.classList.toggle("on", !!r.passive_mode);
+        } catch (e) { /* silently ignore */ }
+    }
+
+    async function saveIoConfig(app) {
+        const nodeId  = app.elements.ioNodeIdInput.value.trim().toUpperCase();
+        const txPower = parseInt(app.elements.ioTxPowerInput.value);
+        const statusEl = app.elements.ioConfigStatus;
+
+        if (nodeId && !/^[0-9A-F]{6}$/.test(nodeId)) {
+            statusEl.textContent = "Node address must be exactly 6 hex characters.";
+            statusEl.style.color = "var(--red)";
+            return;
+        }
+        if (app.elements.ioTxPowerInput.value !== "" && (isNaN(txPower) || txPower < 0 || txPower > 20)) {
+            statusEl.textContent = "TX Power must be 0–20.";
+            statusEl.style.color = "var(--red)";
+            return;
+        }
+
+        const payload = { passive_mode: app.elements.ioPassiveModeCheckbox.checked };
+        if (nodeId)                              payload.node_id  = nodeId;
+        if (app.elements.ioTxPowerInput.value)   payload.tx_power = txPower;
+
+        try {
+            const r = await window.MiOpenApi.postJson("/api/io/config", payload);
+            if (!r.success) { statusEl.textContent = r.message || "Save failed."; statusEl.style.color = "var(--red)"; return; }
+            statusEl.textContent = "Saved. Reboot to apply.";
+            statusEl.style.color = "var(--green)";
+        } catch (e) {
+            statusEl.textContent = "Error: " + (e.message || e);
+            statusEl.style.color = "var(--red)";
+        }
+    }
+
+    function initIoConfig(app) {
+        app.elements.ioNodeIdInput          = document.getElementById("io-node-id");
+        app.elements.ioTxPowerInput         = document.getElementById("io-tx-power");
+        app.elements.ioPassiveModeCheckbox  = document.getElementById("io-passive-mode");
+        app.elements.ioPassiveToggle        = document.getElementById("io-passive-toggle");
+        app.elements.ioConfigStatus         = document.getElementById("io-config-status");
+
+        app.elements.ioPassiveToggle.addEventListener("click", function () {
+            var chk = app.elements.ioPassiveModeCheckbox;
+            chk.checked = !chk.checked;
+            app.elements.ioPassiveToggle.classList.toggle("on", chk.checked);
+        });
+
+        document.getElementById("io-config-save").addEventListener("click", function () { saveIoConfig(app); });
+        loadIoConfig(app);
+    }
+
+    // ── Access Password ───────────────────────────────────────────────────────
+
+    function initAccessPassword(app) {
+        app.elements.accessPasswordNew     = document.getElementById("access-password-new");
+        app.elements.accessPasswordConfirm = document.getElementById("access-password-confirm");
+        app.elements.accessPasswordStatus  = document.getElementById("access-password-status");
+
+        document.getElementById("access-password-save").addEventListener("click", async function () {
+            const pwd     = app.elements.accessPasswordNew.value;
+            const confirm = app.elements.accessPasswordConfirm.value;
+            const statusEl = app.elements.accessPasswordStatus;
+
+            if (pwd !== confirm) {
+                statusEl.textContent = "Passwords do not match.";
+                statusEl.style.color = "var(--red)";
+                return;
+            }
+            if (pwd.length > 32) {
+                statusEl.textContent = "Password too long (max 32 characters).";
+                statusEl.style.color = "var(--red)";
+                return;
+            }
+
+            try {
+                const r = await window.MiOpenApi.postJson("/api/misc/password", { password: pwd });
+                if (!r.success) { statusEl.textContent = r.message || "Save failed."; statusEl.style.color = "var(--red)"; return; }
+                statusEl.textContent = pwd ? "Password saved. Reboot to apply." : "Password cleared. Reboot to apply.";
+                statusEl.style.color = "var(--green)";
+                app.elements.accessPasswordNew.value     = "";
+                app.elements.accessPasswordConfirm.value = "";
+            } catch (e) {
+                statusEl.textContent = "Error: " + (e.message || e);
+                statusEl.style.color = "var(--red)";
+            }
+        });
     }
 
     // ── IO System Key ─────────────────────────────────────────────────────────
@@ -364,6 +465,8 @@
         document.getElementById("wifi-config-save").addEventListener("click", function () { app.saveWifiConfig(); });
         loadWifiConfig(app);
 
+        initIoConfig(app);
+        initAccessPassword(app);
         initIoKey(app);
         initReboot();
 

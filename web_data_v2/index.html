@@ -200,18 +200,39 @@
               </div>
             </div>
             <div style="display:flex;gap:6px;">
-              <input type="text"     id="mqtt-server"    class="s-input" placeholder="Server" style="flex:2;">
-              <input type="text"     id="mqtt-port"      class="s-input" placeholder="Port"   style="flex:1;">
+              <div style="flex:2;">
+                <label style="font-size:11px;color:var(--text3);">Broker address</label>
+                <input type="text" id="mqtt-server" class="s-input" placeholder="192.168.1.x or hostname" style="margin-top:4px;">
+              </div>
+              <div style="flex:1;">
+                <label style="font-size:11px;color:var(--text3);">Port</label>
+                <input type="text" id="mqtt-port" class="s-input" placeholder="1883 / 8883 (TLS)" style="margin-top:4px;">
+              </div>
             </div>
             <div style="display:flex;gap:6px;">
-              <input type="text"     id="mqtt-user"      class="s-input" placeholder="User"     style="flex:1;">
-              <input type="password" id="mqtt-password"  class="s-input" placeholder="Password" style="flex:1;">
+              <div style="flex:1;">
+                <label style="font-size:11px;color:var(--text3);">Username</label>
+                <input type="text" id="mqtt-user" class="s-input" placeholder="leave blank if none" style="margin-top:4px;">
+              </div>
+              <div style="flex:1;">
+                <label style="font-size:11px;color:var(--text3);">Password</label>
+                <input type="password" id="mqtt-password" class="s-input" placeholder="leave blank if none" style="margin-top:4px;">
+              </div>
             </div>
             <div style="display:flex;gap:6px;">
-              <input type="text" id="mqtt-client-id" class="s-input" placeholder="Client ID (blank = auto)" style="flex:1;">
-              <input type="text" id="mqtt-topic"     class="s-input" placeholder="Topic prefix"             style="flex:1;">
+              <div style="flex:1;">
+                <label style="font-size:11px;color:var(--text3);">Client ID</label>
+                <input type="text" id="mqtt-client-id" class="s-input" placeholder="blank = auto-generated" style="margin-top:4px;">
+              </div>
+              <div style="flex:1;">
+                <label style="font-size:11px;color:var(--text3);">Topic prefix</label>
+                <input type="text" id="mqtt-topic" class="s-input" placeholder="e.g. home/io-rts" style="margin-top:4px;">
+              </div>
             </div>
-            <input type="text" id="mqtt-discovery" class="s-input" placeholder="Discovery topic">
+            <div>
+              <label style="font-size:11px;color:var(--text3);">Home Assistant discovery prefix</label>
+              <input type="text" id="mqtt-discovery" class="s-input" placeholder="e.g. homeassistant/device/io-rts" style="margin-top:4px;">
+            </div>
             <button class="s-btn primary" id="mqtt-update">Save MQTT</button>
           </div>
           <!-- Syslog -->

@@ -12,22 +12,15 @@
         app.elements.otaUploadButton.disabled = false;
     }
 
-    function pollUntilOnline(app, deadline) {
-        if (Date.now() > deadline) {
-            finishWithError(app, "Timed out waiting for device to come back online.");
-            return;
-        }
+    function pollUntilOnline(onDone, onTimeout, deadline) {
+        if (Date.now() > deadline) { onTimeout(); return; }
         fetch("/api/devices?" + Date.now(), { cache: "no-store" })
             .then(function (r) {
-                if (r.ok) {
-                    setStatus(app, "Done — device is back online.", "green");
-                    app.elements.otaUploadButton.disabled = false;
-                } else {
-                    setTimeout(function () { pollUntilOnline(app, deadline); }, POLL_INTERVAL);
-                }
+                if (r.ok) { onDone(); }
+                else { setTimeout(function () { pollUntilOnline(onDone, onTimeout, deadline); }, POLL_INTERVAL); }
             })
             .catch(function () {
-                setTimeout(function () { pollUntilOnline(app, deadline); }, POLL_INTERVAL);
+                setTimeout(function () { pollUntilOnline(onDone, onTimeout, deadline); }, POLL_INTERVAL);
             });
     }
 
@@ -59,7 +52,11 @@
             if (xhr.status === 200) {
                 app.elements.otaProgress.value = 100;
                 setStatus(app, "Rebooting…");
-                pollUntilOnline(app, Date.now() + POLL_TIMEOUT);
+                pollUntilOnline(
+                    function () { setStatus(app, "Done — device is back online.", "green"); app.elements.otaUploadButton.disabled = false; },
+                    function () { finishWithError(app, "Timed out waiting for device to come back online."); },
+                    Date.now() + POLL_TIMEOUT
+                );
             } else if (xhr.status === 401) {
                 finishWithError(app, "Wrong OTA key (401 Unauthorized).");
             } else if (xhr.status === 400) {
@@ -272,7 +269,11 @@
                 progress.value = 100;
                 status.textContent = "Rebooting…";
                 status.style.color = "";
-                pollUntilOnline(app, Date.now() + POLL_TIMEOUT);
+                pollUntilOnline(
+                    function () { status.textContent = "Done — device is back online."; status.style.color = "green"; btn.disabled = false; },
+                    function () { setErr("Timed out waiting for device to come back online."); },
+                    Date.now() + POLL_TIMEOUT
+                );
             } else if (xhr.status === 401) {
                 setErr("Wrong OTA key (401 Unauthorized).");
             } else {

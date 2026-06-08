@@ -498,17 +498,20 @@
             if (!confirm("Reboot the device now?")) return;
             fetch("/api/reboot", { method: "POST" })
                 .then(function () {
-                    showToast("Rebooting…", "info", 60000);
+                    var rebootingToast = showToast("Rebooting…", "info", 60000);
                     var deadline = Date.now() + 60000;
                     function poll() {
                         if (Date.now() > deadline) {
+                            if (rebootingToast) rebootingToast._dismiss();
                             showToast("Device did not come back online.", "error");
                             return;
                         }
                         fetch("/api/devices?" + Date.now(), { cache: "no-store" })
                             .then(function (r) {
-                                if (r.ok) { showToast("Device is back online.", "success"); }
-                                else { setTimeout(poll, 2000); }
+                                if (r.ok) {
+                                    if (rebootingToast) rebootingToast._dismiss();
+                                    showToast("Device is back online.", "success");
+                                } else { setTimeout(poll, 2000); }
                             })
                             .catch(function () { setTimeout(poll, 2000); });
                     }

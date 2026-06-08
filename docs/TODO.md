@@ -92,9 +92,9 @@ Source: the WebSocket already broadcasts `position` events; toasts need to be tr
 
 ---
 
-## MQTT — Enable/disable toggle
+## ~~MQTT — Enable/disable toggle~~ ✓ done (v1.1.5)
 
-Add a toggle in Settings → MQTT to disable the MQTT client entirely without clearing the broker configuration. When disabled, no connection is attempted and no "Losing qos0 data" warnings appear in the log. Useful for users who do not use MQTT or have intermittent broker connectivity. Store the enabled state in NVS alongside the existing MQTT config. Expose via `GET /api/mqtt` (add `enabled` field) and `POST /api/mqtt` (accept `enabled` field). Wire the toggle in the web UI next to the broker server field.
+Toggle in Settings → MQTT to disable the MQTT client without clearing config. Persisted in NVS. Exposed via `GET /api/mqtt` (`enabled` field) and `POST /api/mqtt`. Web UI toggle wired next to the MQTT header.
 
 ---
 

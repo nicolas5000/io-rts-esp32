@@ -193,7 +193,11 @@
           <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:8px;">
             <div style="display:flex;align-items:center;justify-content:space-between;">
               <span class="row-label">MQTT</span>
-              <span class="row-status" id="mqtt-conn-status"></span>
+              <div style="display:flex;align-items:center;gap:8px;">
+                <span class="row-status" id="mqtt-conn-status"></span>
+                <div class="s-toggle" id="mqtt-enabled-toggle"></div>
+                <input type="checkbox" id="mqtt-enabled" style="display:none">
+              </div>
             </div>
             <div style="display:flex;gap:6px;">
               <input type="text"     id="mqtt-server"    class="s-input" placeholder="Server" style="flex:2;">

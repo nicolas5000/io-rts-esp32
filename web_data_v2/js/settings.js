@@ -108,6 +108,9 @@
             app.elements.mqttClientIdInput.value  = config.client_id || "";
             app.elements.mqttTopicInput.value     = config.topic     || "";
             app.elements.mqttDiscoveryInput.value = config.discovery || "";
+            var enabled = config.enabled !== false;
+            app.elements.mqttEnabledInput.checked = enabled;
+            app.elements.mqttEnabledToggle.classList.toggle("on", enabled);
             var statusEl = document.getElementById("mqtt-conn-status");
             if (statusEl) {
                 statusEl.textContent = config.connected ? "● Connected" : "○ Not connected";
@@ -122,6 +125,7 @@
     async function updateMqttConfig(app) {
         try {
             const r = await window.MiOpenApi.postJson("/api/mqtt", {
+                enabled:   app.elements.mqttEnabledInput.checked,
                 user:      app.elements.mqttUserInput.value,
                 server:    app.elements.mqttServerInput.value,
                 password:  app.elements.mqttPasswordInput.value,
@@ -500,6 +504,13 @@
         document.getElementById("fallback-save").addEventListener("click", function () { app.saveFallbackConfig(); });
         loadFallbackConfig(app);
         fallbackStatusTimer = setInterval(function () { pollFallbackStatus(app); }, 15000);
+
+        app.elements.mqttEnabledInput  = document.getElementById("mqtt-enabled");
+        app.elements.mqttEnabledToggle = document.getElementById("mqtt-enabled-toggle");
+        app.elements.mqttEnabledToggle.addEventListener("click", function () {
+            app.elements.mqttEnabledInput.checked = !app.elements.mqttEnabledInput.checked;
+            app.elements.mqttEnabledToggle.classList.toggle("on", app.elements.mqttEnabledInput.checked);
+        });
 
         app.elements.wifiSsidInput     = document.getElementById("wifi-ssid");
         app.elements.wifiPasswordInput = document.getElementById("wifi-password");

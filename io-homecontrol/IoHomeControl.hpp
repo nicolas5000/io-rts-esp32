@@ -114,6 +114,9 @@ namespace iohome
     /// @return true if active, false if passive (no radio transmission, only listening)
     bool isPassive() { return mPassiveMode; }
 
+    /// @brief Change passive mode at runtime without reboot.
+    void SetPassiveMode(bool passive) { mPassiveMode = passive; }
+
     /// @brief Get Listening status
     /// @return true if listening for incoming frames on radio, false otherwise.
     bool isReceiving() { return mReceiving; }

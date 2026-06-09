@@ -1486,11 +1486,15 @@ static esp_err_t api_io_config_post(httpd_req_t *req)
     }
 
     cJSON *jPassive = cJSON_GetObjectItem(json, "passive_mode");
-    if (cJSON_IsBool(jPassive))
-        Config::IoHomeConfig::ActivatePassiveMode(cJSON_IsTrue(jPassive));
+    if (cJSON_IsBool(jPassive)) {
+        bool passive = cJSON_IsTrue(jPassive);
+        Config::IoHomeConfig::ActivatePassiveMode(passive);
+        if (s_manager && s_manager->mIoHome)
+            s_manager->mIoHome->SetPassiveMode(passive);
+    }
 
     cJSON_Delete(json);
-    send_result(req, true, "IO config saved — reboot to apply");
+    send_result(req, true, "IO config saved");
     return ESP_OK;
 }
 

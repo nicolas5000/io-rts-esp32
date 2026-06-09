@@ -33,7 +33,9 @@
             uploadFile: function (url, file) {
                 var fd = new FormData();
                 fd.append("file", file);
-                return requestJson(url, { method: "POST", body: fd });
+                var headers = {};
+                if (window.MiOpenApi.otaKey) headers["X-OTA-Key"] = window.MiOpenApi.otaKey;
+                return requestJson(url, { method: "POST", headers: headers, body: fd });
             }
         };
     }

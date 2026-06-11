@@ -219,12 +219,17 @@ namespace iohome
         set_destination(frame, dst_node_id);
         set_source(frame, own_node_id);
         // Data layout matches observed CMD 0x29 responses from Somfy devices:
-        // [0-1] device type/subtype
+        // [0-1] device type/subtype encoded as: type = (data[0] << 2) | (data[1] >> 6), subtype = data[1] & 0x3F
         // [2-4] own node ID repeated in data field
         // [5]   manufacturer (0x02 = Somfy)
         // [6-8] padding/counter
         static uint8_t s_counter = 0;
-        uint8_t data[9] = {device_type, 0x00, own_node_id[0], own_node_id[1], own_node_id[2], 0x02, 0xDC, 0x00, s_counter++};
+        uint8_t data[9] = {
+            static_cast<uint8_t>(device_type >> 2),           // upper 6 bits of device type
+            static_cast<uint8_t>((device_type & 0x03) << 6),  // lower 2 bits of device type, subtype = 0
+            own_node_id[0], own_node_id[1], own_node_id[2],
+            0x02, 0xDC, 0x00, s_counter++
+        };
         return set_command(frame, CMD_DISCOVER_RESPONSE, data, sizeof(data));
     }
 
@@ -280,6 +285,14 @@ namespace iohome
         set_source(frame, own_node_id);
 
         return set_command(frame, CMD_KEY_INIT_TRANSFER);
+    }
+
+    bool create_launch_key_transfer(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id, const uint8_t challenge[HMAC_SIZE])
+    {
+        init_frame(frame, true, true, false, true);
+        set_destination(frame, dst_node_id);
+        set_source(frame, own_node_id);
+        return set_command(frame, CMD_LAUNCH_KEY_TRANSFER, challenge, HMAC_SIZE);
     }
 
     bool create_key_transfer(

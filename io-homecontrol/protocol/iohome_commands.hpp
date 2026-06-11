@@ -115,6 +115,14 @@ namespace iohome
     /// @return true on success
     bool create_init_transfer(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id);
 
+    /// @brief Create a LaunchKeyTransfer IO Frame (0x38) — ask the target to send its system key (Path 1 key exchange)
+    /// @param frame Output IoFrame structure
+    /// @param own_node_id Source node ID (3 bytes)
+    /// @param dst_node_id Destination node ID (3 bytes)
+    /// @param challenge 6-byte random challenge used as IV seed to encrypt the key in CMD 0x32 response
+    /// @return true on success
+    bool create_launch_key_transfer(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id, const uint8_t challenge[HMAC_SIZE]);
+
     /// @brief Create a KeyTransfer IO Frame (0x32)
     /// @param frame Output IoFrame structure
     /// @param old_frame The previous frame sent to device before receiving challenge (probably an InitTransfert)

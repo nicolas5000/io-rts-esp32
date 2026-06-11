@@ -107,9 +107,10 @@ namespace iohome
   constexpr uint8_t CMD_DISCOVER2E_REQUEST = 0x2E;        // No authentication needed, broadcast to 0x00003f
 
   // Key Exchange Commands
-  constexpr uint8_t CMD_KEY_INIT_TRANSFER = 0x31;         // Request challenge, sent after 0x2D
+  constexpr uint8_t CMD_KEY_INIT_TRANSFER = 0x31;         // Request challenge, sent after 0x2D (Path 2: sender pushes key)
   constexpr uint8_t CMD_KEY_TRANSFER = 0x32;              // Response to 0x31 after receiving 0x3C challenge (contains system key protected by TRANSFER_KEY)
-  constexpr uint8_t CMD_KEY_TRANSFER_CONFIRMATION = 0x33; // Response to 0X32
+  constexpr uint8_t CMD_KEY_TRANSFER_CONFIRMATION = 0x33; // Response to 0x32
+  constexpr uint8_t CMD_LAUNCH_KEY_TRANSFER = 0x38;       // Ask sender to share its key (Path 1: receiver requests key), 6-byte challenge payload
 
   // Authentication Commands (0x3C-0x3D)
   constexpr uint8_t CMD_CHALLENGE_REQUEST = 0x3C;  // Challenge received after sending a command with authentication required (or 0x31)

@@ -978,8 +978,24 @@ namespace iohome
 
     RxFrameQueueItem rxItem;
 
-    // Outer loop: wait for CMD 28, retry the handshake from scratch on partial failures.
-    // The mutex is released between CMD 28 polls so the frame processor can keep running.
+    // Wait for CMD 29 within timeout_ms, skipping CMD 28/2A/2E broadcasts.
+    auto wait_for_cmd29 = [&](RxFrameQueueItem &item, int timeout_ms) -> bool {
+      int64_t end_us = esp_timer_get_time() + (int64_t)timeout_ms * 1000LL;
+      for (;;) {
+        int64_t rem_us = end_us - esp_timer_get_time();
+        if (rem_us <= 0) return false;
+        TickType_t ticks = (TickType_t)(rem_us / 1000 / portTICK_PERIOD_MS);
+        if (ticks == 0) ticks = 1;
+        if (!xQueueReceive(sRxIoQueue, &item, ticks)) return false;
+        if (item.frame.command_id == CMD_DISCOVER_RESPONSE) return true;
+        uint8_t cmd = item.frame.command_id;
+        if (cmd != CMD_DISCOVER_REQUEST && cmd != CMD_DISCOVER_SPE_REQUEST && cmd != CMD_DISCOVER2E_REQUEST)
+          return false; // unexpected — abort this attempt
+      }
+    };
+
+    // Outer loop: send CMD 28, wait for TaHoma's CMD 29, then request its key via CMD 38.
+    // Retry on any step failure until the 120 s session window expires.
     while ((active == nullptr || *active) && esp_timer_get_time() < deadline)
     {
       if (!xSemaphoreTake(sMutex, MUTEX_MAX_WAIT_TICKS))
@@ -988,111 +1004,82 @@ namespace iohome
         return "";
       }
 
-      // Wait up to 2 s for the next CMD 28 from any controller
-      bool got = xQueueReceive(sRxIoQueue, &rxItem, RECEIVED_IO_DISCOVERY_RESPONSE_WAIT_TICKS);
-      if (!got || rxItem.frame.command_id != CMD_DISCOVER_REQUEST)
+      UBaseType_t savedPriority = uxTaskPriorityGet(NULL);
+      vTaskPrioritySet(NULL, IO_FRAME_PROCESSING_TASK);
+
+      // Step 1: broadcast CMD 28 to trigger TaHoma (in key-send mode) into responding
+      IoFrame disc_req;
+      if (!create_discovery_request(disc_req, mOwnNodeId)
+          || !TransmitFrame(disc_req, FREQUENCY_CHANNEL_2, LONG_PREAMBLE_LENGTH))
       {
+        IO_LOGE("LearnKeyFromController: failed to send CMD 28");
+        vTaskPrioritySet(NULL, savedPriority);
+        xSemaphoreGive(sMutex);
+        vTaskDelay(pdMS_TO_TICKS(500));
+        continue;
+      }
+      IO_LOGI("LearnKeyFromController: CMD 28 sent — waiting for CMD 29");
+
+      // Step 2: wait for CMD 29 from TaHoma
+      if (!wait_for_cmd29(rxItem, 2000))
+      {
+        IO_LOGI("LearnKeyFromController: no CMD 29 — retrying");
+        vTaskPrioritySet(NULL, savedPriority);
         xSemaphoreGive(sMutex);
         continue;
       }
-      ESP_LOGI(TAG, "LearnKeyFromController: CMD 28 from %s",
-               buffToHexString(NODE_ID_SIZE, rxItem.frame.src_node).c_str());
+      uint8_t tahoma_node[NODE_ID_SIZE];
+      memcpy(tahoma_node, rxItem.frame.src_node, NODE_ID_SIZE);
+      uint32_t tahoma_freq = rxItem.frequency;
+      IO_LOGI("LearnKeyFromController: CMD 29 from {}", buffToHexString(NODE_ID_SIZE, tahoma_node));
 
-      // Step 2: respond with CMD 29 using our own node ID — hold mutex through the handshake
-      IoFrame disc_resp;
-      if (!create_discovery_response(disc_resp, mOwnNodeId, rxItem.frame.src_node)
-          || !TransmitFrame(disc_resp, rxItem.frequency, SHORT_PREAMBLE_LENGTH))
+      // Step 3: send CMD 38 (launch key transfer) with a 6-byte random challenge.
+      // TaHoma will encrypt its system key using this challenge as the IV seed.
+      uint8_t launch_challenge[HMAC_SIZE];
+      iohome::crypto::generate_challenge(launch_challenge);
+
+      IoFrame launch_frame;
+      if (!create_launch_key_transfer(launch_frame, mOwnNodeId, tahoma_node, launch_challenge)
+          || !TransmitFrame(launch_frame, tahoma_freq, SHORT_PREAMBLE_LENGTH))
       {
-        ESP_LOGE(TAG, "LearnKeyFromController: failed to send CMD 29");
+        IO_LOGE("LearnKeyFromController: failed to send CMD 38");
+        vTaskPrioritySet(NULL, savedPriority);
         xSemaphoreGive(sMutex);
         continue;
       }
-      ESP_LOGI(TAG, "LearnKeyFromController: CMD 29 sent");
+      IO_LOGI("LearnKeyFromController: CMD 38 sent — waiting for CMD 32");
 
-      // Step 3: wait for CMD 2C
+      // Step 4: wait for CMD 32 (TaHoma's system key, encrypted with TRANSFER_KEY + our challenge)
       if (!xQueueReceive(sRxIoQueue, &rxItem, RECEIVED_IO_TREATMENT_WAIT_TICKS)
-          || rxItem.frame.command_id != CMD_DISCOVER_CONFIRMATION)
+          || rxItem.frame.command_id != CMD_KEY_TRANSFER
+          || rxItem.frame.data_len != AES_KEY_SIZE)
       {
-        ESP_LOGW(TAG, "LearnKeyFromController: no CMD 2C — retrying from CMD 28");
+        IO_LOGE("LearnKeyFromController: no CMD 32 received");
+        vTaskPrioritySet(NULL, savedPriority);
         xSemaphoreGive(sMutex);
         continue;
       }
-      ESP_LOGI(TAG, "LearnKeyFromController: CMD 2C received — sending CMD 2D");
+      IO_LOGI("LearnKeyFromController: CMD 32 received — decrypting");
 
-      // Step 4: reply with CMD 2D
-      IoFrame conf_ack;
-      if (!create_discovery_confirmation_ack(conf_ack, mOwnNodeId, rxItem.frame.src_node)
-          || !TransmitFrame(conf_ack, rxItem.frequency, SHORT_PREAMBLE_LENGTH))
+      // Step 5: decrypt TaHoma's key.
+      // IV is built from [CMD_38_byte] as frame_data and launch_challenge as the challenge.
+      uint8_t cmd38_byte = CMD_LAUNCH_KEY_TRANSFER;
+      uint8_t decrypted_key[AES_KEY_SIZE];
+      if (!iohome::crypto::crypt_2w_key(&cmd38_byte, 1, launch_challenge, rxItem.frame.data, decrypted_key))
       {
-        ESP_LOGE(TAG, "LearnKeyFromController: failed to send CMD 2D");
+        IO_LOGE("LearnKeyFromController: key decryption failed");
+        vTaskPrioritySet(NULL, savedPriority);
         xSemaphoreGive(sMutex);
         continue;
       }
 
-      // Steps 5-9: complete the key exchange
-      bool handshake_ok = false;
-      std::string result;
+      std::string result = buffToHexString(AES_KEY_SIZE, decrypted_key);
+      IO_LOGI("LearnKeyFromController: key received: {}", result);
 
-      IoFrame key_init_frame;
-      uint8_t controller_node[NODE_ID_SIZE];
-
-      if (!xQueueReceive(sRxIoQueue, &rxItem, RECEIVED_IO_TREATMENT_WAIT_TICKS)
-          || rxItem.frame.command_id != CMD_KEY_INIT_TRANSFER)
-      {
-        ESP_LOGE(TAG, "LearnKeyFromController: no CMD 31 received");
-      }
-      else
-      {
-        ESP_LOGI(TAG, "LearnKeyFromController: CMD 31 received");
-        key_init_frame = rxItem.frame;
-        memcpy(controller_node, rxItem.frame.src_node, NODE_ID_SIZE);
-
-        RxFrameQueueItem challenge_item;
-        if (!xQueueReceive(sRxIoQueue, &challenge_item, RECEIVED_IO_TREATMENT_WAIT_TICKS)
-            || challenge_item.frame.command_id != CMD_CHALLENGE_REQUEST
-            || challenge_item.frame.data_len != HMAC_SIZE)
-        {
-          ESP_LOGE(TAG, "LearnKeyFromController: no CMD 3C received");
-        }
-        else
-        {
-          ESP_LOGI(TAG, "LearnKeyFromController: CMD 3C received — waiting for CMD 32");
-
-          RxFrameQueueItem key_item;
-          if (!xQueueReceive(sRxIoQueue, &key_item, RECEIVED_IO_TREATMENT_WAIT_TICKS)
-              || key_item.frame.command_id != CMD_KEY_TRANSFER
-              || key_item.frame.data_len != AES_KEY_SIZE)
-          {
-            ESP_LOGE(TAG, "LearnKeyFromController: no CMD 32 received");
-          }
-          else
-          {
-            ESP_LOGI(TAG, "LearnKeyFromController: CMD 32 received — decrypting key");
-            uint8_t decrypted_key[AES_KEY_SIZE];
-            if (!iohome::crypto::crypt_2w_key(&key_init_frame.command_id, 1,
-                                               challenge_item.frame.data,
-                                               key_item.frame.data, decrypted_key))
-            {
-              ESP_LOGE(TAG, "LearnKeyFromController: key decryption failed");
-            }
-            else
-            {
-              result = buffToHexString(AES_KEY_SIZE, decrypted_key);
-              ESP_LOGI(TAG, "LearnKeyFromController: key received: %s", result.c_str());
-
-              IoFrame confirm;
-              if (create_key_transfer_confirmation(confirm, mOwnNodeId, controller_node))
-                TransmitFrame(confirm, key_item.frequency, SHORT_PREAMBLE_LENGTH);
-              ESP_LOGI(TAG, "LearnKeyFromController: CMD 33 sent — complete");
-              handshake_ok = true;
-            }
-          }
-        }
-      }
-
+      vTaskPrioritySet(NULL, savedPriority);
       xSemaphoreGive(sMutex);
-      if (handshake_ok) return result;
-      // Any step after CMD 2D failed — retry from CMD 28
+      IO_LOGI("LearnKeyFromController: session complete");
+      return result;
     }
 
     IO_LOGI("LearnKeyFromController: session ended (timeout or cancelled)");
@@ -1117,6 +1104,22 @@ namespace iohome
     const int64_t deadline   = esp_timer_get_time() + SESSION_US;
 
     RxFrameQueueItem rxItem;
+
+    // Receive the next non-discovery-broadcast frame within timeout_ms.
+    // TaHoma keeps sending CMD 28/2A/2E broadcasts throughout the handshake; skip them.
+    auto receive_non_broadcast = [&](RxFrameQueueItem &item, int timeout_ms) -> bool {
+      int64_t end_us = esp_timer_get_time() + (int64_t)timeout_ms * 1000LL;
+      for (;;) {
+        int64_t rem_us = end_us - esp_timer_get_time();
+        if (rem_us <= 0) return false;
+        TickType_t ticks = (TickType_t)(rem_us / 1000 / portTICK_PERIOD_MS);
+        if (ticks == 0) ticks = 1;
+        if (!xQueueReceive(sRxIoQueue, &item, ticks)) return false;
+        uint8_t cmd = item.frame.command_id;
+        if (cmd != CMD_DISCOVER_REQUEST && cmd != CMD_DISCOVER_SPE_REQUEST && cmd != CMD_DISCOVER2E_REQUEST)
+          return true;
+      }
+    };
 
     // Outer loop: wait for CMD 28, retry the handshake from scratch on partial failures.
     // The mutex is released between CMD 28 polls so the frame processor can keep running.
@@ -1161,90 +1164,101 @@ namespace iohome
       ESP_LOGI(TAG, "PairAsDevice: CMD 29 sent (as %s ROLLER_SHUTTER)",
                buffToHexString(NODE_ID_SIZE, fakeNodeId).c_str());
 
-      // Step 3: wait for CMD 2C
-      if (!xQueueReceive(sRxIoQueue, &rxItem, RECEIVED_IO_TREATMENT_WAIT_TICKS)
-          || rxItem.frame.command_id != CMD_DISCOVER_CONFIRMATION)
+      // Step 3: wait for CMD 2C or CMD 31, skipping CMD 28/2A/2E broadcasts.
+      // TaHoma sends CMD 2C within ~1.5 s of receiving CMD 29.
+      if (!receive_non_broadcast(rxItem, 2000))
       {
-        ESP_LOGW(TAG, "PairAsDevice: no CMD 2C — retrying from CMD 28");
-        xSemaphoreGive(sMutex);
-        continue;
-      }
-      ESP_LOGI(TAG, "PairAsDevice: CMD 2C received — sending CMD 2D");
-
-      // Step 4: reply with CMD 2D
-      IoFrame conf_ack;
-      if (!create_discovery_confirmation_ack(conf_ack, fakeNodeId, rxItem.frame.src_node)
-          || !TransmitFrame(conf_ack, rxItem.frequency, SHORT_PREAMBLE_LENGTH))
-      {
-        ESP_LOGE(TAG, "PairAsDevice: failed to send CMD 2D");
+        ESP_LOGW(TAG, "PairAsDevice: no CMD 2C/31 — retrying from CMD 28");
         xSemaphoreGive(sMutex);
         continue;
       }
 
-      // Steps 5-9: complete the key exchange — no more retries from here
-      bool handshake_ok = false;
-      std::string result;
-
-      IoFrame key_init_frame;
-      uint8_t controller_node[NODE_ID_SIZE];
-
-      if (!xQueueReceive(sRxIoQueue, &rxItem, RECEIVED_IO_TREATMENT_WAIT_TICKS)
-          || rxItem.frame.command_id != CMD_KEY_INIT_TRANSFER)
+      if (rxItem.frame.command_id == CMD_DISCOVER_CONFIRMATION)
       {
-        ESP_LOGE(TAG, "PairAsDevice: no CMD 31 received");
+        ESP_LOGI(TAG, "PairAsDevice: CMD 2C received — sending CMD 2D");
+        // Step 4: reply with CMD 2D
+        IoFrame conf_ack;
+        if (!create_discovery_confirmation_ack(conf_ack, fakeNodeId, rxItem.frame.src_node)
+            || !TransmitFrame(conf_ack, rxItem.frequency, SHORT_PREAMBLE_LENGTH))
+        {
+          ESP_LOGE(TAG, "PairAsDevice: failed to send CMD 2D");
+          xSemaphoreGive(sMutex);
+          continue;
+        }
+        // After CMD 2D, TaHoma continues broadcasting CMD 28 for ~4 s before sending CMD 31.
+        // Skip those broadcasts and wait up to 10 s for CMD 31.
+        if (!receive_non_broadcast(rxItem, 10000) || rxItem.frame.command_id != CMD_KEY_INIT_TRANSFER)
+        {
+          ESP_LOGE(TAG, "PairAsDevice: no CMD 31 after CMD 2D");
+          xSemaphoreGive(sMutex);
+          continue;
+        }
+        ESP_LOGI(TAG, "PairAsDevice: CMD 31 received (after 2C/2D)");
+      }
+      else if (rxItem.frame.command_id == CMD_KEY_INIT_TRANSFER)
+      {
+        ESP_LOGI(TAG, "PairAsDevice: CMD 31 received (no 2C/2D)");
       }
       else
       {
-        ESP_LOGI(TAG, "PairAsDevice: CMD 31 received");
-        key_init_frame = rxItem.frame;
-        memcpy(controller_node, rxItem.frame.src_node, NODE_ID_SIZE);
+        ESP_LOGW(TAG, "PairAsDevice: unexpected cmd 0x%02X — retrying from CMD 28", rxItem.frame.command_id);
+        xSemaphoreGive(sMutex);
+        continue;
+      }
 
-        RxFrameQueueItem challenge_item;
-        if (!xQueueReceive(sRxIoQueue, &challenge_item, RECEIVED_IO_TREATMENT_WAIT_TICKS)
-            || challenge_item.frame.command_id != CMD_CHALLENGE_REQUEST
-            || challenge_item.frame.data_len != HMAC_SIZE)
+      // Steps 5-9: complete the key exchange
+      bool handshake_ok = false;
+      std::string result;
+
+      IoFrame key_init_frame = rxItem.frame;
+      uint8_t controller_node[NODE_ID_SIZE];
+      memcpy(controller_node, rxItem.frame.src_node, NODE_ID_SIZE);
+
+      RxFrameQueueItem challenge_item;
+      if (!xQueueReceive(sRxIoQueue, &challenge_item, RECEIVED_IO_TREATMENT_WAIT_TICKS)
+          || challenge_item.frame.command_id != CMD_CHALLENGE_REQUEST
+          || challenge_item.frame.data_len != HMAC_SIZE)
+      {
+        ESP_LOGE(TAG, "PairAsDevice: no CMD 3C received");
+      }
+      else
+      {
+        ESP_LOGI(TAG, "PairAsDevice: CMD 3C received — waiting for CMD 32");
+
+        RxFrameQueueItem key_item;
+        if (!xQueueReceive(sRxIoQueue, &key_item, RECEIVED_IO_TREATMENT_WAIT_TICKS)
+            || key_item.frame.command_id != CMD_KEY_TRANSFER
+            || key_item.frame.data_len != AES_KEY_SIZE)
         {
-          ESP_LOGE(TAG, "PairAsDevice: no CMD 3C received");
+          ESP_LOGE(TAG, "PairAsDevice: no CMD 32 received");
         }
         else
         {
-          ESP_LOGI(TAG, "PairAsDevice: CMD 3C received — waiting for CMD 32");
-
-          RxFrameQueueItem key_item;
-          if (!xQueueReceive(sRxIoQueue, &key_item, RECEIVED_IO_TREATMENT_WAIT_TICKS)
-              || key_item.frame.command_id != CMD_KEY_TRANSFER
-              || key_item.frame.data_len != AES_KEY_SIZE)
+          ESP_LOGI(TAG, "PairAsDevice: CMD 32 received — decrypting key");
+          uint8_t decrypted_key[AES_KEY_SIZE];
+          if (!iohome::crypto::crypt_2w_key(&key_init_frame.command_id, 1,
+                                             challenge_item.frame.data,
+                                             key_item.frame.data, decrypted_key))
           {
-            ESP_LOGE(TAG, "PairAsDevice: no CMD 32 received");
+            ESP_LOGE(TAG, "PairAsDevice: key decryption failed");
           }
           else
           {
-            ESP_LOGI(TAG, "PairAsDevice: CMD 32 received — decrypting key");
-            uint8_t decrypted_key[AES_KEY_SIZE];
-            if (!iohome::crypto::crypt_2w_key(&key_init_frame.command_id, 1,
-                                               challenge_item.frame.data,
-                                               key_item.frame.data, decrypted_key))
-            {
-              ESP_LOGE(TAG, "PairAsDevice: key decryption failed");
-            }
-            else
-            {
-              result = buffToHexString(AES_KEY_SIZE, decrypted_key);
-              ESP_LOGI(TAG, "PairAsDevice: key received: %s", result.c_str());
+            result = buffToHexString(AES_KEY_SIZE, decrypted_key);
+            ESP_LOGI(TAG, "PairAsDevice: key received: %s", result.c_str());
 
-              IoFrame confirm;
-              if (create_key_transfer_confirmation(confirm, fakeNodeId, controller_node))
-                TransmitFrame(confirm, key_item.frequency, SHORT_PREAMBLE_LENGTH);
-              ESP_LOGI(TAG, "PairAsDevice: CMD 33 sent — complete");
-              handshake_ok = true;
-            }
+            IoFrame confirm;
+            if (create_key_transfer_confirmation(confirm, fakeNodeId, controller_node))
+              TransmitFrame(confirm, key_item.frequency, SHORT_PREAMBLE_LENGTH);
+            ESP_LOGI(TAG, "PairAsDevice: CMD 33 sent — complete");
+            handshake_ok = true;
           }
         }
       }
 
       xSemaphoreGive(sMutex);
       if (handshake_ok) return result;
-      // Any step after CMD 2D failed — retry from CMD 28
+      // Any step after CMD 31 failed — retry from CMD 28
     }
 
     IO_LOGI("PairAsDevice: session ended (timeout or cancelled)");

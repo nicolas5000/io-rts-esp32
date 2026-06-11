@@ -93,6 +93,9 @@ AGENTS.md
 .claude/
 CLAUDE.md
 CLAUDE_*.md
+docs/pairing_sequence_reference.md
+docs/superpowers/
+web-portalcontext.md
 
 # Tools
 tools/console_probe.py

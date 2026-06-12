@@ -475,6 +475,12 @@ static esp_err_t api_action_post(httpd_req_t *req)
     const char *deviceId = cJSON_IsString(jDeviceId) ? jDeviceId->valuestring : "";
     int value = cJSON_IsNumber(jValue) ? (int)jValue->valuedouble : -1;
 
+    if (!s_manager->mIoHome) {
+        cJSON_Delete(json);
+        send_result(req, false, "Radio not initialised");
+        return ESP_OK;
+    }
+
     bool ok = false;
 
     if (strcmp(action, "open") == 0) {
@@ -1807,16 +1813,17 @@ static esp_err_t api_upload_devices(httpd_req_t *req)
         if (!json_to_stored_device(item, deviceID, sd)) continue;
 
         Helpers::DeviceStorage::SaveIoDevice(deviceID, sd);
-        s_manager->mIoHome->RestoreDevice(deviceID, sd.device);
+        if (s_manager->mIoHome) {
+            s_manager->mIoHome->RestoreDevice(deviceID, sd.device);
+            for (const std::string &remoteID : sd.linked_remotes)
+                s_manager->mIoHome->LinkRemoteToDevice(remoteID, deviceID);
+        }
 
         s_manager->mIoDevicesMutex.lock();
         auto it = s_manager->mIoDevices.find(deviceID);
         if (it != s_manager->mIoDevices.end()) it->second = sd.device;
         else s_manager->mIoDevices.insert({deviceID, sd.device});
         s_manager->mIoDevicesMutex.unlock();
-
-        for (const std::string &remoteID : sd.linked_remotes)
-            s_manager->mIoHome->LinkRemoteToDevice(remoteID, deviceID);
 
         count++;
     }
@@ -1961,6 +1968,12 @@ static bool s_pairing_active = false;
 static void pairing_task(void *)
 {
     ESP_LOGI(TAG, "Pairing task started");
+    if (!s_manager->mIoHome) {
+        s_pairing_active = false;
+        web_server_broadcast_message("{\"type\":\"pair_failed\"}");
+        vTaskDelete(nullptr);
+        return;
+    }
     const int MAX_ATTEMPTS = 60; // 60 × ~2 s = ~120 s window
     bool ok = false;
     int heartbeat_counter = 0;
@@ -2014,6 +2027,12 @@ static bool s_learn_active = false;
 static void learn_task(void *)
 {
     ESP_LOGI(TAG, "Key learn task started — waiting for controller");
+    if (!s_manager->mIoHome) {
+        s_learn_active = false;
+        web_server_broadcast_message("{\"type\":\"learn_failed\"}");
+        vTaskDelete(nullptr);
+        return;
+    }
     std::string key = s_manager->mIoHome->LearnKeyFromController(&s_learn_active);
     s_learn_active = false;
     if (key.empty()) {
@@ -2063,6 +2082,12 @@ static bool s_pair_device_active = false;
 static void pair_device_task(void *)
 {
     ESP_LOGI(TAG, "Pair-as-device task started — waiting for TaHoma broadcast CMD 28");
+    if (!s_manager->mIoHome) {
+        s_pair_device_active = false;
+        web_server_broadcast_message("{\"type\":\"pair_device_failed\"}");
+        vTaskDelete(nullptr);
+        return;
+    }
     std::string key = s_manager->mIoHome->PairAsDevice(&s_pair_device_active);
     s_pair_device_active = false;
     if (key.empty()) {

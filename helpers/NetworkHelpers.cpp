@@ -125,8 +125,9 @@ namespace Helpers
     static bool  sHadSuccessfulConn = false;
     static bool  sFallbackApRunning = false;
     static uint8_t sLastDisconnectReason = 0;
-    static esp_timer_handle_t sFallbackApTimer = nullptr;
+    static esp_timer_handle_t sFallbackApTimer  = nullptr;
     static uint64_t sFallbackApTimerStartUs = 0;
+    static esp_timer_handle_t sReconnectTimer   = nullptr;
     static esp_netif_t *sApNetif = nullptr;
 
     // Runtime config loaded from NVS, defaults to Kconfig values
@@ -250,6 +251,16 @@ namespace Helpers
         sCfgApTimeoutS       = tmo;
     }
 
+    static void reconnect_timer_cb(void *)
+    {
+        esp_wifi_connect();
+        if (sCfgFallbackEnabled && !sFallbackApRunning) {
+            int threshold = sHadSuccessfulConn ? sCfgRetriesRunning : sCfgRetriesBoot;
+            if (sWifiRetryCount >= threshold)
+                start_fallback_ap();
+        }
+    }
+
     /// @brief Handler to manage Wifi events
     static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                                    int32_t event_id, void *event_data)
@@ -273,19 +284,14 @@ namespace Helpers
             int delay_ms = (sWifiRetryCount <= 3) ? 10000 : 30000;
             ESP_LOGW(TAG, "WiFi disconnected (reason %d), retry %d in %ds",
                      evt->reason, sWifiRetryCount, delay_ms / 1000);
-            vTaskDelay(pdMS_TO_TICKS(delay_ms));
-            esp_wifi_connect();
-
-            if (sCfgFallbackEnabled && !sFallbackApRunning) {
-                int threshold = sHadSuccessfulConn ? sCfgRetriesRunning : sCfgRetriesBoot;
-                if (sWifiRetryCount >= threshold)
-                    start_fallback_ap();
-            }
+            esp_timer_stop(sReconnectTimer); // cancel any pending reconnect before rescheduling
+            esp_timer_start_once(sReconnectTimer, (uint64_t)delay_ms * 1000);
         }
         else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP)
         {
             ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
             ESP_LOGI(TAG, "got ip:" IPSTR, IP2STR(&event->ip_info.ip));
+            esp_timer_stop(sReconnectTimer);
             sHadSuccessfulConn = true;
             sWifiRetryCount    = 0;
             sIsConnected       = true;
@@ -340,6 +346,11 @@ namespace Helpers
         ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
         set_wifi_from_configuration();
         load_fallback_config();
+
+        esp_timer_create_args_t ra = {};
+        ra.callback = reconnect_timer_cb;
+        ra.name     = "wifi_reconnect";
+        esp_timer_create(&ra, &sReconnectTimer);
     }
 #endif // CONFIG_CONNECTIVITY_CHOICE_WIFI
 #ifdef CONFIG_CONNECTIVITY_CHOICE_ETH

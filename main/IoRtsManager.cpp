@@ -343,6 +343,7 @@ namespace IoRts
 
     bool IoRtsManager::LinkRemoteToDevice(const std::string &remoteID, const std::string &deviceID)
     {
+        if (mIoHome == nullptr) return false;
         bool success = mIoHome->LinkRemoteToDevice(remoteID, deviceID);
         if (success)
         {

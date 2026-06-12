@@ -1328,11 +1328,11 @@ namespace Helpers
             return; // don't send status if in passive mode
 
         // Copy device data under the mutex, then release before any blocking MQTT publish (M2).
+        if (mIoRtsManager == nullptr)
+            return;
         iohome::IoDevice deviceCopy;
         {
             std::lock_guard<std::mutex> guard(mIoRtsManager->mIoDevicesMutex);
-            if (mIoRtsManager == nullptr)
-                return;
             auto device = mIoRtsManager->mIoDevices.find(deviceId);
             if (device == mIoRtsManager->mIoDevices.end())
                 return;

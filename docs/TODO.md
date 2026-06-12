@@ -42,23 +42,6 @@ A hard reset unpairs the motor from all controllers and resets it to factory def
 2. Press and hold for 5 seconds until the window/blind makes a brief movement.
 3. The device is now unpaired. Re-pair via "Add Device".
 
-### General — Device not responding
-- Verify the device is within radio range (~10 m through walls).
-- If the device is solar/battery-powered, check the LOW_POWER flag is shown in the device detail — this requires a longer preamble and the app handles it automatically once the device type is known.
-- Try "Force Status Update" from the device menu to trigger a fresh poll.
-- If the device still does not respond, perform a hard reset and re-pair.
-
----
-
-## Web UI package upload (ZIP)
-
-Allow uploading all web UI files as a single `.zip` via the browser, replacing individual file uploads. A `web.zip` from a GitHub release would be uploadable in one step.
-
-Backend: stream ZIP into heap buffer, extract each entry to LittleFS via a new `POST /api/upload/web/package` endpoint (OTA key protected, miniz single-file library).
-
-Frontend: file picker for `.zip` + progress bar in the OTA section of Settings.
-
----
 
 ## OLED — On/off control
 

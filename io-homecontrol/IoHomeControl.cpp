@@ -1033,7 +1033,7 @@ namespace iohome
       uint8_t tahoma_node[NODE_ID_SIZE];
       memcpy(tahoma_node, rxItem.frame.src_node, NODE_ID_SIZE);
       uint32_t tahoma_freq = rxItem.frequency;
-      IO_LOGI("LearnKeyFromController: CMD 29 from {}", buffToHexString(NODE_ID_SIZE, tahoma_node));
+      IO_LOGI("LearnKeyFromController: CMD 29 from {} data[{}]={}", buffToHexString(NODE_ID_SIZE, tahoma_node), rxItem.frame.data_len, buffToHexString(rxItem.frame.data_len, rxItem.frame.data));
 
       // Step 3: send CMD 31 to TaHoma, requesting it challenge us and share its key.
       // Sequence: 28 → 29 → ESP sends 31 → TaHoma sends 3C → ESP sends 38 → TaHoma sends 32
@@ -1175,8 +1175,8 @@ namespace iohome
       }
       ESP_LOGI(TAG, "WaitAndRespondToCmd28: CMD 29 sent (type=1023/controller) — observing TaHoma response");
 
-      // Collect whatever TaHoma sends in the next 2 s
-      int64_t obs_end = esp_timer_get_time() + 2000000LL;
+      // Collect whatever TaHoma sends in the next 20 s
+      int64_t obs_end = esp_timer_get_time() + 20000000LL;
       while (esp_timer_get_time() < obs_end)
       {
         RxFrameQueueItem obs;
@@ -1184,10 +1184,11 @@ namespace iohome
         if (rem_us <= 0) break;
         TickType_t ticks = (TickType_t)(rem_us / 1000 / portTICK_PERIOD_MS);
         if (ticks == 0) ticks = 1;
-        if (!xQueueReceive(sRxIoQueue, &obs, ticks)) break;
-        ESP_LOGI(TAG, "WaitAndRespondToCmd28: TaHoma sent CMD 0x%02X from %s data[%u]=%s",
+        if (!xQueueReceive(sRxIoQueue, &obs, ticks)) continue;
+        ESP_LOGI(TAG, "WaitAndRespondToCmd28: TaHoma sent CMD 0x%02X from %s to %s data[%u]=%s",
                  obs.frame.command_id,
                  buffToHexString(NODE_ID_SIZE, obs.frame.src_node).c_str(),
+                 buffToHexString(NODE_ID_SIZE, obs.frame.dest_node).c_str(),
                  obs.frame.data_len,
                  buffToHexString(obs.frame.data_len, obs.frame.data).c_str());
       }

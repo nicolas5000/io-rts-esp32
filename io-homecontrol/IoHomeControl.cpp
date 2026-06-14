@@ -1038,30 +1038,28 @@ namespace iohome
       uint32_t tahoma_freq = rxItem.frequency;
       IO_LOGI("LearnKeyFromController: CMD 29 from {}", buffToHexString(NODE_ID_SIZE, tahoma_node));
 
-      // Step 3: wait for TaHoma's CMD 31 (key init — TaHoma offers its key).
-      // Expected sequence: 29 → 31 → 3C → 38 → 32
+      // Step 3: send CMD 31 to TaHoma, requesting it challenge us and share its key.
+      // Sequence: 28 → 29 → ESP sends 31 → TaHoma sends 3C → ESP sends 38 → TaHoma sends 32
+      IoFrame init_frame;
+      if (!create_init_transfer(init_frame, mOwnNodeId, tahoma_node)
+          || !TransmitFrame(init_frame, tahoma_freq, SHORT_PREAMBLE_LENGTH))
       {
-        RxFrameQueueItem item31;
-        if (!xQueueReceive(sRxIoQueue, &item31, pdMS_TO_TICKS(1000))
-            || item31.frame.command_id != CMD_KEY_INIT_TRANSFER)
-        {
-          uint8_t got = item31.frame.command_id;
-          ESP_LOGW(TAG, "LearnKeyFromController: no CMD 31 (got 0x%02X) — retrying", got);
-          vTaskPrioritySet(NULL, savedPriority);
-          xSemaphoreGive(sMutex);
-          continue;
-        }
+        IO_LOGE("LearnKeyFromController: failed to send CMD 31");
+        vTaskPrioritySet(NULL, savedPriority);
+        xSemaphoreGive(sMutex);
+        continue;
       }
-      ESP_LOGI(TAG, "LearnKeyFromController: CMD 31 received");
+      IO_LOGI("LearnKeyFromController: CMD 31 sent — waiting for CMD 3C");
 
-      // Step 4: wait for TaHoma's CMD 3C (TaHoma's challenge to the ESP).
+      // Step 4: wait for TaHoma's CMD 3C (challenge to the ESP).
       {
         RxFrameQueueItem item3c;
         if (!xQueueReceive(sRxIoQueue, &item3c, pdMS_TO_TICKS(1000))
             || item3c.frame.command_id != CMD_CHALLENGE_REQUEST
             || item3c.frame.data_len != HMAC_SIZE)
         {
-          ESP_LOGW(TAG, "LearnKeyFromController: no CMD 3C after CMD 31 — retrying");
+          uint8_t got = item3c.frame.command_id;
+          ESP_LOGW(TAG, "LearnKeyFromController: no CMD 3C after CMD 31 (got 0x%02X) — retrying", got);
           vTaskPrioritySet(NULL, savedPriority);
           xSemaphoreGive(sMutex);
           continue;
@@ -1073,7 +1071,6 @@ namespace iohome
                buffToHexString(HMAC_SIZE, tahoma_3c_challenge).c_str());
 
       // Step 5: send CMD 38 with TaHoma's CMD 3C data as the challenge.
-      // TaHoma uses the challenge to encrypt CMD 32; echoing it back makes the IV deterministic.
       IoFrame launch_frame;
       if (!create_launch_key_transfer(launch_frame, mOwnNodeId, tahoma_node, tahoma_3c_challenge)
           || !TransmitFrame(launch_frame, tahoma_freq, SHORT_PREAMBLE_LENGTH))
@@ -1098,7 +1095,7 @@ namespace iohome
 
       // Step 7: decrypt TaHoma's key.
       // Log raw CMD 32 and try both possible IV frame bytes (0x38 and 0x31) — log both
-      // results until we confirm which frame byte TaHoma uses for encryption.
+      // results until we confirm which produces the correct key.
       ESP_LOGI(TAG, "LearnKeyFromController: CMD 32 raw=%s",
                buffToHexString(AES_KEY_SIZE, rxItem.frame.data).c_str());
       uint8_t cmd38_byte = CMD_LAUNCH_KEY_TRANSFER;   // 0x38
@@ -1106,8 +1103,8 @@ namespace iohome
       uint8_t decrypted_38[AES_KEY_SIZE], decrypted_31[AES_KEY_SIZE];
       iohome::crypto::crypt_2w_key(&cmd38_byte, 1, tahoma_3c_challenge, rxItem.frame.data, decrypted_38);
       iohome::crypto::crypt_2w_key(&cmd31_byte, 1, tahoma_3c_challenge, rxItem.frame.data, decrypted_31);
-      ESP_LOGI(TAG, "LearnKeyFromController: key(IV=0x38)=%s", buffToHexString(AES_KEY_SIZE, decrypted_38).c_str());
-      ESP_LOGI(TAG, "LearnKeyFromController: key(IV=0x31)=%s", buffToHexString(AES_KEY_SIZE, decrypted_31).c_str());
+      ESP_LOGI(TAG, "LearnKeyFromController: key(0x38+3C)=%s", buffToHexString(AES_KEY_SIZE, decrypted_38).c_str());
+      ESP_LOGI(TAG, "LearnKeyFromController: key(0x31+3C)=%s", buffToHexString(AES_KEY_SIZE, decrypted_31).c_str());
 
       // Use 0x38 variant as primary result — both are logged above for comparison.
       std::string result = buffToHexString(AES_KEY_SIZE, decrypted_38);

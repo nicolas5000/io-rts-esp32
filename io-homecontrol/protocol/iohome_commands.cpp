@@ -228,7 +228,7 @@ namespace iohome
             static_cast<uint8_t>(device_type >> 2),           // upper 6 bits of device type
             static_cast<uint8_t>((device_type & 0x03) << 6),  // lower 2 bits of device type, subtype = 0
             own_node_id[0], own_node_id[1], own_node_id[2],
-            0x02, 0xDC, 0x00, s_counter++
+            0x02, 0xCC, 0x00, s_counter++
         };
         return set_command(frame, CMD_DISCOVER_RESPONSE, data, sizeof(data));
     }

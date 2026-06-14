@@ -978,6 +978,11 @@ namespace iohome
 
     RxFrameQueueItem rxItem;
 
+    // TaHoma's CMD 3C challenge persists across retry iterations: TaHoma may send
+    // CMD 32 on iteration N using the CMD 3C challenge it sent on iteration N-1.
+    uint8_t tahoma_3c_challenge[HMAC_SIZE];
+    bool have_tahoma_3c = false;
+
     // Wait for CMD 29 within timeout_ms, skipping CMD 28/2A/2E broadcasts.
     auto wait_for_cmd29 = [&](RxFrameQueueItem &item, int timeout_ms) -> bool {
       int64_t end_us = esp_timer_get_time() + (int64_t)timeout_ms * 1000LL;
@@ -1046,24 +1051,50 @@ namespace iohome
         xSemaphoreGive(sMutex);
         continue;
       }
-      IO_LOGI("LearnKeyFromController: CMD 38 sent — waiting for CMD 32");
+      IO_LOGI("LearnKeyFromController: CMD 38 sent — waiting for CMD 3C/32");
 
-      // Step 4: wait for CMD 32 (TaHoma's system key, encrypted with TRANSFER_KEY + our CMD 38 challenge)
-      if (!xQueueReceive(sRxIoQueue, &rxItem, RECEIVED_IO_TREATMENT_WAIT_TICKS)
-          || rxItem.frame.command_id != CMD_KEY_TRANSFER
-          || rxItem.frame.data_len != AES_KEY_SIZE)
+      // Step 4: TaHoma sends CMD 3C (its own challenge) before CMD 32.
+      // CMD 32 is encrypted with TaHoma's CMD 3C data, NOT our CMD 38 challenge.
+      // Capture CMD 3C first; fall back to our_challenge only if CMD 32 arrives directly.
+      bool got_cmd32 = false;
       {
+        RxFrameQueueItem first;
+        if (xQueueReceive(sRxIoQueue, &first, pdMS_TO_TICKS(250))) {
+          if (first.frame.command_id == CMD_CHALLENGE_REQUEST && first.frame.data_len == HMAC_SIZE) {
+            memcpy(tahoma_3c_challenge, first.frame.data, HMAC_SIZE);
+            have_tahoma_3c = true;
+            ESP_LOGI(TAG, "LearnKeyFromController: CMD 3C from TaHoma challenge=%s",
+                     buffToHexString(HMAC_SIZE, tahoma_3c_challenge).c_str());
+            // Now wait for CMD 32 that follows CMD 3C
+            if (xQueueReceive(sRxIoQueue, &rxItem, RECEIVED_IO_TREATMENT_WAIT_TICKS)
+                && rxItem.frame.command_id == CMD_KEY_TRANSFER
+                && rxItem.frame.data_len == AES_KEY_SIZE) {
+              got_cmd32 = true;
+            }
+          } else if (first.frame.command_id == CMD_KEY_TRANSFER && first.frame.data_len == AES_KEY_SIZE) {
+            rxItem    = first;
+            got_cmd32 = true;
+          }
+        }
+      }
+      if (!got_cmd32) {
         IO_LOGE("LearnKeyFromController: no CMD 32 received");
         vTaskPrioritySet(NULL, savedPriority);
         xSemaphoreGive(sMutex);
         continue;
       }
-      IO_LOGI("LearnKeyFromController: CMD 32 received — decrypting");
 
-      // Step 5: decrypt TaHoma's key — frame_data = CMD 38 byte, IV = our random challenge.
+      // Step 5: decrypt TaHoma's key.
+      // Use TaHoma's CMD 3C challenge when available; fall back to our CMD 38 challenge.
+      const uint8_t *decrypt_challenge = have_tahoma_3c ? tahoma_3c_challenge : our_challenge;
+      IO_LOGI("LearnKeyFromController: CMD 32 received — decrypting with %s challenge",
+              have_tahoma_3c ? "TaHoma CMD 3C" : "our CMD 38");
+      ESP_LOGI(TAG, "LearnKeyFromController: CMD 32 raw=%s",
+               buffToHexString(AES_KEY_SIZE, rxItem.frame.data).c_str());
+
       uint8_t cmd38_byte = CMD_LAUNCH_KEY_TRANSFER;
       uint8_t decrypted_key[AES_KEY_SIZE];
-      if (!iohome::crypto::crypt_2w_key(&cmd38_byte, 1, our_challenge, rxItem.frame.data, decrypted_key))
+      if (!iohome::crypto::crypt_2w_key(&cmd38_byte, 1, decrypt_challenge, rxItem.frame.data, decrypted_key))
       {
         IO_LOGE("LearnKeyFromController: key decryption failed");
         vTaskPrioritySet(NULL, savedPriority);

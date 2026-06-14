@@ -1173,25 +1173,73 @@ namespace iohome
         xSemaphoreGive(sMutex);
         continue;
       }
-      ESP_LOGI(TAG, "WaitAndRespondToCmd28: CMD 29 sent (type=1023/controller) — observing TaHoma response");
+      ESP_LOGI(TAG, "WaitAndRespondToCmd28: CMD 29 sent — sending CMD 31 to request key exchange");
 
-      // Collect whatever TaHoma sends in the next 20 s
-      int64_t obs_end = esp_timer_get_time() + 20000000LL;
-      while (esp_timer_get_time() < obs_end)
+      // Step 2: send CMD 31 to request TaHoma challenges us and shares its key.
+      IoFrame init_frame;
+      if (!create_init_transfer(init_frame, mOwnNodeId, tahoma_node)
+          || !TransmitFrame(init_frame, tahoma_freq, SHORT_PREAMBLE_LENGTH))
       {
-        RxFrameQueueItem obs;
-        int64_t rem_us = obs_end - esp_timer_get_time();
-        if (rem_us <= 0) break;
-        TickType_t ticks = (TickType_t)(rem_us / 1000 / portTICK_PERIOD_MS);
-        if (ticks == 0) ticks = 1;
-        if (!xQueueReceive(sRxIoQueue, &obs, ticks)) continue;
-        ESP_LOGI(TAG, "WaitAndRespondToCmd28: TaHoma sent CMD 0x%02X from %s to %s data[%u]=%s",
-                 obs.frame.command_id,
-                 buffToHexString(NODE_ID_SIZE, obs.frame.src_node).c_str(),
-                 buffToHexString(NODE_ID_SIZE, obs.frame.dest_node).c_str(),
-                 obs.frame.data_len,
-                 buffToHexString(obs.frame.data_len, obs.frame.data).c_str());
+        IO_LOGE("WaitAndRespondToCmd28: failed to send CMD 31");
+        vTaskPrioritySet(NULL, savedPriority);
+        xSemaphoreGive(sMutex);
+        continue;
       }
+      ESP_LOGI(TAG, "WaitAndRespondToCmd28: CMD 31 sent — waiting for CMD 3C");
+
+      // Step 3: wait for TaHoma's CMD 3C challenge.
+      uint8_t challenge[HMAC_SIZE];
+      {
+        RxFrameQueueItem item3c;
+        if (!xQueueReceive(sRxIoQueue, &item3c, pdMS_TO_TICKS(2000))
+            || item3c.frame.command_id != CMD_CHALLENGE_REQUEST
+            || item3c.frame.data_len != HMAC_SIZE)
+        {
+          ESP_LOGW(TAG, "WaitAndRespondToCmd28: no CMD 3C (got 0x%02X) — retrying", item3c.frame.command_id);
+          vTaskPrioritySet(NULL, savedPriority);
+          xSemaphoreGive(sMutex);
+          continue;
+        }
+        memcpy(challenge, item3c.frame.data, HMAC_SIZE);
+      }
+      ESP_LOGI(TAG, "WaitAndRespondToCmd28: CMD 3C received challenge=%s",
+               buffToHexString(HMAC_SIZE, challenge).c_str());
+
+      // Step 4: send CMD 38 with the challenge.
+      IoFrame launch_frame;
+      if (!create_launch_key_transfer(launch_frame, mOwnNodeId, tahoma_node, challenge)
+          || !TransmitFrame(launch_frame, tahoma_freq, SHORT_PREAMBLE_LENGTH))
+      {
+        IO_LOGE("WaitAndRespondToCmd28: failed to send CMD 38");
+        vTaskPrioritySet(NULL, savedPriority);
+        xSemaphoreGive(sMutex);
+        continue;
+      }
+      ESP_LOGI(TAG, "WaitAndRespondToCmd28: CMD 38 sent — waiting for CMD 32");
+
+      // Step 5: wait for CMD 32 (TaHoma's encrypted key).
+      RxFrameQueueItem keyItem;
+      if (!xQueueReceive(sRxIoQueue, &keyItem, RECEIVED_IO_TREATMENT_WAIT_TICKS)
+          || keyItem.frame.command_id != CMD_KEY_TRANSFER
+          || keyItem.frame.data_len != AES_KEY_SIZE)
+      {
+        ESP_LOGW(TAG, "WaitAndRespondToCmd28: no CMD 32 (got 0x%02X) — retrying", keyItem.frame.command_id);
+        vTaskPrioritySet(NULL, savedPriority);
+        xSemaphoreGive(sMutex);
+        continue;
+      }
+
+      // Step 6: decrypt and log — try both IV frame bytes.
+      uint8_t key38[AES_KEY_SIZE], key31[AES_KEY_SIZE];
+      uint8_t iv38 = CMD_LAUNCH_KEY_TRANSFER, iv31 = CMD_KEY_INIT_TRANSFER;
+      iohome::crypto::crypt_2w_key(&iv38, 1, challenge, keyItem.frame.data, key38);
+      iohome::crypto::crypt_2w_key(&iv31, 1, challenge, keyItem.frame.data, key31);
+      ESP_LOGI(TAG, "WaitAndRespondToCmd28: CMD 32 raw=%s",
+               buffToHexString(AES_KEY_SIZE, keyItem.frame.data).c_str());
+      ESP_LOGI(TAG, "WaitAndRespondToCmd28: key(iv=0x38)=%s",
+               buffToHexString(AES_KEY_SIZE, key38).c_str());
+      ESP_LOGI(TAG, "WaitAndRespondToCmd28: key(iv=0x31)=%s",
+               buffToHexString(AES_KEY_SIZE, key31).c_str());
 
       vTaskPrioritySet(NULL, savedPriority);
       xSemaphoreGive(sMutex);

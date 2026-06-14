@@ -1130,17 +1130,30 @@ namespace iohome
 
     while ((active == nullptr || *active) && esp_timer_get_time() < deadline)
     {
-      // Wait for any frame from the radio queue
-      RxFrameQueueItem item;
-      if (!xQueueReceive(sRxIoQueue, &item, pdMS_TO_TICKS(2000)))
+      if (!xSemaphoreTake(sMutex, MUTEX_MAX_WAIT_TICKS))
         continue;
 
-      uint8_t cmd = item.frame.command_id;
+      UBaseType_t savedPriority = uxTaskPriorityGet(NULL);
+      vTaskPrioritySet(NULL, IO_FRAME_PROCESSING_TASK);
 
-      if (cmd != CMD_DISCOVER_REQUEST)
+      // Poll for CMD 28 for up to 2 s while holding the mutex (same pattern as LearnKeyFromController).
+      // The main processing loop also reads sRxIoQueue under this mutex, so we must hold it first.
+      RxFrameQueueItem item;
+      bool got28 = false;
+      int64_t poll_end = esp_timer_get_time() + 2000000LL;
+      while (esp_timer_get_time() < poll_end)
       {
-        ESP_LOGI(TAG, "WaitAndRespondToCmd28: skip CMD 0x%02X from %s",
-                 cmd, buffToHexString(NODE_ID_SIZE, item.frame.src_node).c_str());
+        int64_t rem_us = poll_end - esp_timer_get_time();
+        TickType_t ticks = (TickType_t)(rem_us / 1000 / portTICK_PERIOD_MS);
+        if (ticks == 0) ticks = 1;
+        if (!xQueueReceive(sRxIoQueue, &item, ticks)) break;
+        if (item.frame.command_id == CMD_DISCOVER_REQUEST) { got28 = true; break; }
+        ESP_LOGD(TAG, "WaitAndRespondToCmd28: skip CMD 0x%02X", item.frame.command_id);
+      }
+      if (!got28)
+      {
+        vTaskPrioritySet(NULL, savedPriority);
+        xSemaphoreGive(sMutex);
         continue;
       }
 
@@ -1149,12 +1162,6 @@ namespace iohome
       uint32_t tahoma_freq = item.frequency;
       ESP_LOGI(TAG, "WaitAndRespondToCmd28: CMD 28 from %s freq=%lu",
                buffToHexString(NODE_ID_SIZE, tahoma_node).c_str(), (unsigned long)tahoma_freq);
-
-      if (!xSemaphoreTake(sMutex, MUTEX_MAX_WAIT_TICKS))
-        continue;
-
-      UBaseType_t savedPriority = uxTaskPriorityGet(NULL);
-      vTaskPrioritySet(NULL, IO_FRAME_PROCESSING_TASK);
 
       // Respond with CMD 29 using controller device type 1023 (0x3FF → data bytes FF C0)
       IoFrame resp;

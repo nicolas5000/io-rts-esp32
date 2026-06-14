@@ -506,6 +506,7 @@
 
         initLearnKey(app);
         initPairDeviceKey(app);
+        initSendKey();
         loadIoKey(app);
     }
 
@@ -977,7 +978,6 @@
         onSendKeyDone: onSendKeyDone
     };
 
-    init_hooks.push(function (app) { initSendKey(); });
 })();
 
 // ── Syslog (settings section) ─────────────────────────────────────────────────

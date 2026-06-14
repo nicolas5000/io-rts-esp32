@@ -595,28 +595,37 @@ namespace iohome
               // Listen and get the key!
               RxFrameQueueItem challengeItem, keyTransferItem;
               uint8_t decrypted_key[AES_KEY_SIZE];
-              if (xQueueReceive(sRxIoQueue, &challengeItem, RECEIVED_IO_TREATMENT_WAIT_TICKS)                                                      // Did we receive a frame?
-                  && challengeItem.frame.command_id == CMD_CHALLENGE_REQUEST                                                                       // Is it a challenge?
-                  && challengeItem.frame.data_len == HMAC_SIZE                                                                                     // Does it contain correct data length?
-                  && xQueueReceive(sRxIoQueue, &keyTransferItem, RECEIVED_IO_TREATMENT_WAIT_TICKS)                                                 // Did we receive another frame?
-                  && keyTransferItem.frame.command_id == CMD_KEY_TRANSFER                                                                          // Is it a key transfer?
-                  && keyTransferItem.frame.data_len == AES_KEY_SIZE                                                                                // Does it contain correct data length?
-                  && iohome::crypto::crypt_2w_key(&item.frame.command_id, 1, challengeItem.frame.data, keyTransferItem.frame.data, decrypted_key)) // decrypt...
+              if (xQueueReceive(sRxIoQueue, &challengeItem, RECEIVED_IO_TREATMENT_WAIT_TICKS)      // Did we receive a frame?
+                  && challengeItem.frame.command_id == CMD_CHALLENGE_REQUEST                        // Is it a challenge?
+                  && challengeItem.frame.data_len == HMAC_SIZE                                      // Does it contain correct data length?
+                  && xQueueReceive(sRxIoQueue, &keyTransferItem, RECEIVED_IO_TREATMENT_WAIT_TICKS) // Did we receive another frame?
+                  && keyTransferItem.frame.command_id == CMD_KEY_TRANSFER                           // Is it a key transfer?
+                  && keyTransferItem.frame.data_len == AES_KEY_SIZE)                                // Does it contain correct data length?
               {
-                std::string hexKey = buffToHexString(AES_KEY_SIZE, decrypted_key);
-                IO_LOGI("Extracted a key to control device {}: {}", buffToHexString(NODE_ID_SIZE, keyTransferItem.frame.dest_node), hexKey);
-                if (sSniffKeyActive)
+                uint8_t challenge_fd[1 + HMAC_SIZE];
+                challenge_fd[0] = challengeItem.frame.command_id;
+                memcpy(challenge_fd + 1, challengeItem.frame.data, HMAC_SIZE);
+                if (iohome::crypto::crypt_2w_key(challenge_fd, sizeof(challenge_fd), challengeItem.frame.data, keyTransferItem.frame.data, decrypted_key))
                 {
-                  strncpy(sSniffedKey, hexKey.c_str(), 32);
-                  sSniffedKey[32] = '\0';
-                  sSniffKeyActive = false;
-                  if (sKeySniffCallback)
-                    sKeySniffCallback(hexKey);
+                  std::string hexKey = buffToHexString(AES_KEY_SIZE, decrypted_key);
+                  IO_LOGI("Extracted a key to control device {}: {}", buffToHexString(NODE_ID_SIZE, keyTransferItem.frame.dest_node), hexKey);
+                  if (sSniffKeyActive)
+                  {
+                    strncpy(sSniffedKey, hexKey.c_str(), 32);
+                    sSniffedKey[32] = '\0';
+                    sSniffKeyActive = false;
+                    if (sKeySniffCallback)
+                      sKeySniffCallback(hexKey);
+                  }
+                }
+                else
+                {
+                  IO_LOGE("ProcessReceivedFrameTask - Failed to decrypt the key!");
                 }
               }
               else
               {
-                IO_LOGE("ProcessReceivedFrameTask - Failed to extract the key!");
+                IO_LOGE("ProcessReceivedFrameTask - Failed to receive challenge/key frames!");
               }
             }
             break;
@@ -978,8 +987,6 @@ namespace iohome
 
     RxFrameQueueItem rxItem;
 
-    uint8_t tahoma_3c_challenge[HMAC_SIZE];
-
     // Wait for CMD 29 within timeout_ms, skipping CMD 28/2A/2E broadcasts.
     auto wait_for_cmd29 = [&](RxFrameQueueItem &item, int timeout_ms) -> bool {
       int64_t end_us = esp_timer_get_time() + (int64_t)timeout_ms * 1000LL;
@@ -1035,75 +1042,65 @@ namespace iohome
       uint32_t tahoma_freq = rxItem.frequency;
       IO_LOGI("LearnKeyFromController: CMD 29 from {} data[{}]={}", buffToHexString(NODE_ID_SIZE, tahoma_node), rxItem.frame.data_len, buffToHexString(rxItem.frame.data_len, rxItem.frame.data));
 
-      // Step 3: send CMD 31 to TaHoma, requesting it challenge us and share its key.
-      // Sequence: 28 → 29 → ESP sends 31 → TaHoma sends 3C → ESP sends 38 → TaHoma sends 32
-      IoFrame init_frame;
-      if (!create_init_transfer(init_frame, mOwnNodeId, tahoma_node)
-          || !TransmitFrame(init_frame, tahoma_freq, SHORT_PREAMBLE_LENGTH))
-      {
-        IO_LOGE("LearnKeyFromController: failed to send CMD 31");
-        vTaskPrioritySet(NULL, savedPriority);
-        xSemaphoreGive(sMutex);
-        continue;
-      }
-      IO_LOGI("LearnKeyFromController: CMD 31 sent — waiting for CMD 3C");
+      // Steps 3+4: send CMD 38 up to 3 times per CMD 29 cycle.
+      // Same challenge for all retries — TaHoma may respond to any of the 3 attempts and the
+      // challenge must match whichever one it received.
+      // CMD 32 arrives within ~60ms when TaHoma processes CMD 38, so 100ms is sufficient for
+      // attempts 1 and 2. The last attempt uses 1s to give TaHoma time to recover or respond.
+      // Note: 2C/2D confirmation handshake was tested and found to break TaHoma's key exchange —
+      // TaHoma stops responding to CMD 38 with CMD 32 after receiving CMD 2C.
+      uint8_t our_challenge[HMAC_SIZE];
+      esp_fill_random(our_challenge, HMAC_SIZE);
 
-      // Step 4: wait for TaHoma's CMD 3C (challenge to the ESP).
+      bool got32 = false;
+      for (int attempt = 0; attempt < 3 && !got32; ++attempt)
       {
-        RxFrameQueueItem item3c;
-        if (!xQueueReceive(sRxIoQueue, &item3c, pdMS_TO_TICKS(1000))
-            || item3c.frame.command_id != CMD_CHALLENGE_REQUEST
-            || item3c.frame.data_len != HMAC_SIZE)
+        IoFrame launch_frame;
+        if (!create_launch_key_transfer(launch_frame, mOwnNodeId, tahoma_node, our_challenge)
+            || !TransmitFrame(launch_frame, tahoma_freq, SHORT_PREAMBLE_LENGTH))
         {
-          uint8_t got = item3c.frame.command_id;
-          ESP_LOGW(TAG, "LearnKeyFromController: no CMD 3C after CMD 31 (got 0x%02X) — retrying", got);
-          vTaskPrioritySet(NULL, savedPriority);
-          xSemaphoreGive(sMutex);
+          IO_LOGE("LearnKeyFromController: failed to send CMD 38[{}]", attempt);
+          break;
+        }
+        TickType_t wait = (attempt < 2) ? pdMS_TO_TICKS(100) : pdMS_TO_TICKS(1000);
+        IO_LOGI("LearnKeyFromController: CMD 38[{}] challenge={} — waiting {}ms for CMD 32",
+                attempt, buffToHexString(HMAC_SIZE, our_challenge), (attempt < 2) ? 100 : 1000);
+
+        if (!xQueueReceive(sRxIoQueue, &rxItem, wait))
+        {
+          IO_LOGI("LearnKeyFromController: CMD 38[{}] no frame — retrying", attempt);
           continue;
         }
-        memcpy(tahoma_3c_challenge, item3c.frame.data, HMAC_SIZE);
+        if (rxItem.frame.command_id == CMD_KEY_TRANSFER && rxItem.frame.data_len == AES_KEY_SIZE)
+        {
+          got32 = true;
+        }
+        else
+        {
+          IO_LOGI("LearnKeyFromController: CMD 38[{}] rx 0x{:02X} from {} — retrying",
+                  attempt, rxItem.frame.command_id,
+                  buffToHexString(NODE_ID_SIZE, rxItem.frame.src_node));
+        }
       }
-      ESP_LOGI(TAG, "LearnKeyFromController: CMD 3C from TaHoma challenge=%s",
-               buffToHexString(HMAC_SIZE, tahoma_3c_challenge).c_str());
-
-      // Step 5: send CMD 38 with TaHoma's CMD 3C data as the challenge.
-      IoFrame launch_frame;
-      if (!create_launch_key_transfer(launch_frame, mOwnNodeId, tahoma_node, tahoma_3c_challenge)
-          || !TransmitFrame(launch_frame, tahoma_freq, SHORT_PREAMBLE_LENGTH))
-      {
-        IO_LOGE("LearnKeyFromController: failed to send CMD 38");
-        vTaskPrioritySet(NULL, savedPriority);
-        xSemaphoreGive(sMutex);
-        continue;
-      }
-      IO_LOGI("LearnKeyFromController: CMD 38 sent — waiting for CMD 32");
-
-      // Step 6: wait for CMD 32 (TaHoma's encrypted system key).
-      if (!xQueueReceive(sRxIoQueue, &rxItem, RECEIVED_IO_TREATMENT_WAIT_TICKS)
-          || rxItem.frame.command_id != CMD_KEY_TRANSFER
-          || rxItem.frame.data_len != AES_KEY_SIZE)
-      {
-        IO_LOGE("LearnKeyFromController: no CMD 32 received");
+      if (!got32) {
         vTaskPrioritySet(NULL, savedPriority);
         xSemaphoreGive(sMutex);
         continue;
       }
 
-      // Step 7: decrypt TaHoma's key.
-      // Log raw CMD 32 and try both possible IV frame bytes (0x38 and 0x31) — log both
-      // results until we confirm which produces the correct key.
+      // Step 5: decrypt TaHoma's system key.
+      // IV frame_data = [CMD_38, challenge[0..5]] — command byte + challenge payload, matching TaHoma's construction.
+      uint8_t cmd38_fd[1 + HMAC_SIZE];
+      cmd38_fd[0] = CMD_LAUNCH_KEY_TRANSFER;
+      memcpy(cmd38_fd + 1, our_challenge, HMAC_SIZE);
+      uint8_t decrypted_key[AES_KEY_SIZE];
+      iohome::crypto::crypt_2w_key(cmd38_fd, sizeof(cmd38_fd), our_challenge, rxItem.frame.data, decrypted_key);
       ESP_LOGI(TAG, "LearnKeyFromController: CMD 32 raw=%s",
                buffToHexString(AES_KEY_SIZE, rxItem.frame.data).c_str());
-      uint8_t cmd38_byte = CMD_LAUNCH_KEY_TRANSFER;   // 0x38
-      uint8_t cmd31_byte = CMD_KEY_INIT_TRANSFER;     // 0x31
-      uint8_t decrypted_38[AES_KEY_SIZE], decrypted_31[AES_KEY_SIZE];
-      iohome::crypto::crypt_2w_key(&cmd38_byte, 1, tahoma_3c_challenge, rxItem.frame.data, decrypted_38);
-      iohome::crypto::crypt_2w_key(&cmd31_byte, 1, tahoma_3c_challenge, rxItem.frame.data, decrypted_31);
-      ESP_LOGI(TAG, "LearnKeyFromController: key(0x38+3C)=%s", buffToHexString(AES_KEY_SIZE, decrypted_38).c_str());
-      ESP_LOGI(TAG, "LearnKeyFromController: key(0x31+3C)=%s", buffToHexString(AES_KEY_SIZE, decrypted_31).c_str());
+      ESP_LOGI(TAG, "LearnKeyFromController: system key=%s",
+               buffToHexString(AES_KEY_SIZE, decrypted_key).c_str());
 
-      // Use 0x38 variant as primary result — both are logged above for comparison.
-      std::string result = buffToHexString(AES_KEY_SIZE, decrypted_38);
+      std::string result = buffToHexString(AES_KEY_SIZE, decrypted_key);
       IO_LOGI("LearnKeyFromController: key received: {}", result);
 
       vTaskPrioritySet(NULL, savedPriority);
@@ -1205,41 +1202,30 @@ namespace iohome
       ESP_LOGI(TAG, "WaitAndRespondToCmd28: CMD 3C received challenge=%s",
                buffToHexString(HMAC_SIZE, challenge).c_str());
 
-      // Step 4: send CMD 38 with the challenge.
-      IoFrame launch_frame;
-      if (!create_launch_key_transfer(launch_frame, mOwnNodeId, tahoma_node, challenge)
-          || !TransmitFrame(launch_frame, tahoma_freq, SHORT_PREAMBLE_LENGTH))
+      // Step 4: send CMD 32 — encrypt our system key with the challenge and push it to TaHoma.
+      IoFrame key_frame;
+      if (!create_key_transfer(key_frame, init_frame, tahoma_node, mOwnNodeId, mSystemKey, challenge)
+          || !TransmitFrame(key_frame, tahoma_freq, SHORT_PREAMBLE_LENGTH))
       {
-        IO_LOGE("WaitAndRespondToCmd28: failed to send CMD 38");
+        IO_LOGE("WaitAndRespondToCmd28: failed to send CMD 32");
         vTaskPrioritySet(NULL, savedPriority);
         xSemaphoreGive(sMutex);
         continue;
       }
-      ESP_LOGI(TAG, "WaitAndRespondToCmd28: CMD 38 sent — waiting for CMD 32");
+      ESP_LOGI(TAG, "WaitAndRespondToCmd28: CMD 32 sent — waiting for CMD 33 confirmation");
 
-      // Step 5: wait for CMD 32 (TaHoma's encrypted key).
-      RxFrameQueueItem keyItem;
-      if (!xQueueReceive(sRxIoQueue, &keyItem, RECEIVED_IO_TREATMENT_WAIT_TICKS)
-          || keyItem.frame.command_id != CMD_KEY_TRANSFER
-          || keyItem.frame.data_len != AES_KEY_SIZE)
+      // Step 5: wait for CMD 33 (TaHoma confirms key received).
+      RxFrameQueueItem confirmItem;
+      if (!xQueueReceive(sRxIoQueue, &confirmItem, RECEIVED_IO_TREATMENT_WAIT_TICKS)
+          || confirmItem.frame.command_id != CMD_KEY_TRANSFER_CONFIRMATION)
       {
-        ESP_LOGW(TAG, "WaitAndRespondToCmd28: no CMD 32 (got 0x%02X) — retrying", keyItem.frame.command_id);
+        ESP_LOGW(TAG, "WaitAndRespondToCmd28: no CMD 33 confirmation (got 0x%02X) — retrying",
+                 confirmItem.frame.command_id);
         vTaskPrioritySet(NULL, savedPriority);
         xSemaphoreGive(sMutex);
         continue;
       }
-
-      // Step 6: decrypt and log — try both IV frame bytes.
-      uint8_t key38[AES_KEY_SIZE], key31[AES_KEY_SIZE];
-      uint8_t iv38 = CMD_LAUNCH_KEY_TRANSFER, iv31 = CMD_KEY_INIT_TRANSFER;
-      iohome::crypto::crypt_2w_key(&iv38, 1, challenge, keyItem.frame.data, key38);
-      iohome::crypto::crypt_2w_key(&iv31, 1, challenge, keyItem.frame.data, key31);
-      ESP_LOGI(TAG, "WaitAndRespondToCmd28: CMD 32 raw=%s",
-               buffToHexString(AES_KEY_SIZE, keyItem.frame.data).c_str());
-      ESP_LOGI(TAG, "WaitAndRespondToCmd28: key(iv=0x38)=%s",
-               buffToHexString(AES_KEY_SIZE, key38).c_str());
-      ESP_LOGI(TAG, "WaitAndRespondToCmd28: key(iv=0x31)=%s",
-               buffToHexString(AES_KEY_SIZE, key31).c_str());
+      ESP_LOGI(TAG, "WaitAndRespondToCmd28: CMD 33 received — key transfer complete");
 
       vTaskPrioritySet(NULL, savedPriority);
       xSemaphoreGive(sMutex);
@@ -1397,8 +1383,11 @@ namespace iohome
         else
         {
           ESP_LOGI(TAG, "PairAsDevice: CMD 32 received — decrypting key");
+          uint8_t challenge_fd[1 + HMAC_SIZE];
+          challenge_fd[0] = challenge_item.frame.command_id;
+          memcpy(challenge_fd + 1, challenge_item.frame.data, HMAC_SIZE);
           uint8_t decrypted_key[AES_KEY_SIZE];
-          if (!iohome::crypto::crypt_2w_key(&key_init_frame.command_id, 1,
+          if (!iohome::crypto::crypt_2w_key(challenge_fd, sizeof(challenge_fd),
                                              challenge_item.frame.data,
                                              key_item.frame.data, decrypted_key))
           {

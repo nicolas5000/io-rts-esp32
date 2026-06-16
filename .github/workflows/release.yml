@@ -39,7 +39,7 @@ jobs:
             0xf000   build/partition_table/partition-table.bin \
             0x375000 build/ota_data_initial.bin \
             0x10000  build/io-rts-esp32.bin \
-            0x3b7000 build/web.bin
+            0x390000 build/web.bin
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

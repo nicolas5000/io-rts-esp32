@@ -1931,12 +1931,14 @@ static esp_err_t api_upload_devices(httpd_req_t *req)
 
     int count = 0;
     cJSON *item = nullptr;
+    std::map<std::string, Helpers::StoredIoDevice> allDevices;
+    Helpers::DeviceStorage::LoadAllIoDevices(allDevices);
     cJSON_ArrayForEach(item, arr) {
         std::string deviceID;
         Helpers::StoredIoDevice sd = {};
         if (!json_to_stored_device(item, deviceID, sd)) continue;
 
-        Helpers::DeviceStorage::SaveIoDevice(deviceID, sd);
+        allDevices[deviceID] = sd;
         if (s_manager->mIoHome) {
             s_manager->mIoHome->RestoreDevice(deviceID, sd.device);
             for (const std::string &remoteID : sd.linked_remotes)
@@ -1952,6 +1954,7 @@ static esp_err_t api_upload_devices(httpd_req_t *req)
         count++;
     }
     cJSON_Delete(arr);
+    Helpers::DeviceStorage::SaveAllIoDevices(allDevices);
 
     char msg[64];
     snprintf(msg, sizeof(msg), "Restored %d device(s). Reboot to fully apply.", count);
@@ -2106,12 +2109,14 @@ static esp_err_t api_restore_post(httpd_req_t *req)
     int deviceCount = 0;
     cJSON *devArr = cJSON_GetObjectItem(root, "devices");
     if (cJSON_IsArray(devArr)) {
+        std::map<std::string, Helpers::StoredIoDevice> allDevices;
+        Helpers::DeviceStorage::LoadAllIoDevices(allDevices);
         cJSON *item = nullptr;
         cJSON_ArrayForEach(item, devArr) {
             std::string deviceID;
             Helpers::StoredIoDevice sd = {};
             if (!json_to_stored_device(item, deviceID, sd)) continue;
-            Helpers::DeviceStorage::SaveIoDevice(deviceID, sd);
+            allDevices[deviceID] = sd;
             if (s_manager->mIoHome) {
                 s_manager->mIoHome->RestoreDevice(deviceID, sd.device);
                 for (const std::string &remoteID : sd.linked_remotes)
@@ -2124,6 +2129,7 @@ static esp_err_t api_restore_post(httpd_req_t *req)
             s_manager->mIoDevicesMutex.unlock();
             deviceCount++;
         }
+        Helpers::DeviceStorage::SaveAllIoDevices(allDevices);
     }
 
     cJSON *creds = cJSON_GetObjectItem(root, "credentials");

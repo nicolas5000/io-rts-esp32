@@ -180,3 +180,14 @@ fetch("/api/factory-reset",{method:"POST",headers:otaHdr()})
 });}
 return{init:init};
 })();
+window.showMajorBanner=function(r,sk){
+var b=document.getElementById("major-upgrade-banner");if(!b)return;
+var tag=r.tag_name;
+document.getElementById("mub-tag").textContent=tag;
+var a=r.assets||[],fu=r.html_url;
+for(var i=0;i<a.length;i++){if(a[i].name.indexOf("full")!==-1){fu=a[i].browser_download_url;break;}}
+document.getElementById("mub-link").href=fu;
+b.style.display="";
+var d=document.getElementById("mub-dismiss");
+if(d)d.onclick=function(){localStorage.setItem(sk,tag);b.style.display="none";};
+};

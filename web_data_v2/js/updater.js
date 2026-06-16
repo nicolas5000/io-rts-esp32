@@ -181,7 +181,7 @@
                 var latest = candidates[0];
                 if (latest.tag_name === dismissed) return;
                 if (isNewer(latest.tag_name, currentVersion)) {
-                    showBanner(latest, currentVersion);
+                    parseInt(latest.tag_name.slice(1))>parseInt(currentVersion.slice(1))?window.showMajorBanner&&window.showMajorBanner(latest,SD):showBanner(latest,currentVersion);
                     return true;
                 }
             })
@@ -192,7 +192,5 @@
         checkForUpdates(currentVersion);
     }
 
-    function checkNow(v) { localStorage.removeItem(SD); return checkForUpdates(v); }
-
-    window.MiOpenUpdater = { init: init, getChannel: getChannel, checkNow: checkNow };
+    window.MiOpenUpdater = { init: init, getChannel: getChannel, check: checkForUpdates };
 })();

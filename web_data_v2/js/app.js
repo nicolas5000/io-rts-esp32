@@ -297,7 +297,8 @@
                     checkBtn.addEventListener("click", function () {
                         checkBtn.disabled = true;
                         checkBtn.textContent = "…";
-                        Promise.resolve(window.MiOpenUpdater.checkNow(d.version))
+                        localStorage.removeItem("updateDismissed");
+                        Promise.resolve(window.MiOpenUpdater.check(d.version))
                             .then(function (found) {
                                 checkBtn.disabled = false;
                                 checkBtn.textContent = "Check";

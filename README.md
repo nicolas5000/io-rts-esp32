@@ -1,3 +1,5 @@
+PLEASE TAKE NOTE DUE TO A CHANGE IN PARTITION TABLE THE CURRENT RELEASE (2.1.XX) IS A BREAKING CHANGE IN COMPARISON TO PREVIOUS RELEASES (1.1.XX)!
+
 # io-rts-esp32
 IO-Homecontrol 2W (2-Way, with device feedback) protocol and legacy RTS protocol implementation on ESP32-S3 hardware based on ESP-IDF SDK version 6.0.0
 

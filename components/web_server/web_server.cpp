@@ -2346,7 +2346,7 @@ static std::string overkiz_login(const std::string &email, const std::string &pa
     ctx.capture_cookie = true;
 
     esp_http_client_config_t cfg = {};
-    cfg.url            = "https://ha101-1.overkiz.com/enduser-mobile-web/1/enduserAPI/login";
+    cfg.url            = "https://ha101-1.overkiz.com/enduser-mobile-web/enduserAPI/login";
     cfg.method         = HTTP_METHOD_POST;
     cfg.crt_bundle_attach = esp_crt_bundle_attach;
     cfg.timeout_ms     = 15000;
@@ -2375,7 +2375,7 @@ static std::string overkiz_get_devices(const std::string &cookie)
     ctx.capture_cookie = false;
 
     esp_http_client_config_t cfg = {};
-    cfg.url            = "https://ha101-1.overkiz.com/enduser-mobile-web/1/enduserAPI/setup/devices";
+    cfg.url            = "https://ha101-1.overkiz.com/enduser-mobile-web/enduserAPI/setup/devices";
     cfg.method         = HTTP_METHOD_GET;
     cfg.crt_bundle_attach = esp_crt_bundle_attach;
     cfg.timeout_ms     = 15000;

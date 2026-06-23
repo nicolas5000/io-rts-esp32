@@ -460,6 +460,13 @@ struct CalibrationArg { char deviceID[8]; };
 static void calibration_task(void *arg); // forward declaration
 static bool ota_check_key(httpd_req_t *req); // forward declaration
 
+static std::string trim_str(const std::string &s) {
+    const auto ws = " \t\r\n";
+    size_t b = s.find_first_not_of(ws);
+    if (b == std::string::npos) return {};
+    return s.substr(b, s.find_last_not_of(ws) - b + 1);
+}
+
 // ─── POST /api/action ───────────────────────────────────────────────────────
 
 static esp_err_t api_action_post(httpd_req_t *req)
@@ -679,12 +686,12 @@ static esp_err_t api_mqtt_post(httpd_req_t *req)
         return cJSON_IsString(item) ? std::string(item->valuestring) : "";
     };
 
-    std::string user      = get_str("user");
-    std::string server    = get_str("server");
+    std::string user      = trim_str(get_str("user"));
+    std::string server    = trim_str(get_str("server"));
     std::string password  = get_str("password");
-    std::string client_id = get_str("client_id");
-    std::string topic     = get_str("topic");
-    std::string discovery = get_str("discovery");
+    std::string client_id = trim_str(get_str("client_id"));
+    std::string topic     = trim_str(get_str("topic"));
+    std::string discovery = trim_str(get_str("discovery"));
     cJSON *jPort = cJSON_GetObjectItem(json, "port");
 
     if (!user.empty())      Config::MqttConfig::SetClientUsername(user);
@@ -1351,7 +1358,7 @@ static esp_err_t api_syslog_post(httpd_req_t *req)
     cJSON *jId       = cJSON_GetObjectItem(json, "id");
 
     if (cJSON_IsBool(jEnabled))   Config::SyslogConfig::SetEnabled(cJSON_IsTrue(jEnabled));
-    if (cJSON_IsString(jServer))  Config::SyslogConfig::SetServer(jServer->valuestring);
+    if (cJSON_IsString(jServer))  Config::SyslogConfig::SetServer(trim_str(jServer->valuestring));
     if (cJSON_IsNumber(jPort))    Config::SyslogConfig::SetPort((uint16_t)jPort->valuedouble);
     if (cJSON_IsNumber(jFacility)) Config::SyslogConfig::SetFacility((uint8_t)jFacility->valuedouble);
     if (cJSON_IsNumber(jMinLevel)) Config::SyslogConfig::SetMinLevel((uint8_t)jMinLevel->valuedouble);

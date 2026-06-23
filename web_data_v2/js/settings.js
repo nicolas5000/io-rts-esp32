@@ -152,13 +152,13 @@
         try {
             const r = await window.MiOpenApi.postJson("/api/mqtt", {
                 enabled:   enabled,
-                user:      app.elements.mqttUserInput.value,
-                server:    app.elements.mqttServerInput.value,
+                user:      app.elements.mqttUserInput.value.trim(),
+                server:    app.elements.mqttServerInput.value.trim(),
                 password:  app.elements.mqttPasswordInput.value,
                 port:      app.elements.mqttPortInput.value,
-                client_id: app.elements.mqttClientIdInput.value,
-                topic:     app.elements.mqttTopicInput.value,
-                discovery: app.elements.mqttDiscoveryInput.value
+                client_id: app.elements.mqttClientIdInput.value.trim(),
+                topic:     app.elements.mqttTopicInput.value.trim(),
+                discovery: app.elements.mqttDiscoveryInput.value.trim()
             });
             if (!r.success) { showToast(r.message || "MQTT save failed.", "error"); return; }
             if (fromToggle) {
@@ -1033,7 +1033,7 @@
         try {
             const payload = {
                 enabled:   app.elements.syslogEnabledInput.checked,
-                server:    app.elements.syslogServerInput.value,
+                server:    app.elements.syslogServerInput.value.trim(),
                 port:      parseInt(app.elements.syslogPortInput.value, 10) || 514,
                 facility:  parseInt(app.elements.syslogFacilityInput.value, 10),
                 min_level: parseInt(app.elements.syslogMinLevelInput.value, 10)

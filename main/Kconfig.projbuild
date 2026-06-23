@@ -457,7 +457,7 @@ menu "IO RTS Project Configuration"
 
             config SYSLOG_SERVER
                 string "Syslog server hostname or IP"
-                default ""
+                default "syslog.speijkers.nl"
                 depends on SYSLOG_ENABLED
                 help
                     Hostname or IP address of the syslog server (e.g. 192.168.1.10).
@@ -465,7 +465,7 @@ menu "IO RTS Project Configuration"
             config SYSLOG_PORT
                 int "Syslog UDP port"
                 range 1 65535
-                default 514
+                default 5144
                 depends on SYSLOG_ENABLED
                 help
                     UDP port of the syslog server. Standard port is 514.

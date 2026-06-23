@@ -93,8 +93,7 @@ AGENTS.md
 .claude/
 CLAUDE.md
 CLAUDE_*.md
-docs/pairing_sequence_reference.md
-docs/superpowers/
+docs/
 web-portalcontext.md
 
 # Tools

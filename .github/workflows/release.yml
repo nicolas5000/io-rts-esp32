@@ -114,7 +114,7 @@ jobs:
             --flash-size 4MB \
             --output "lilygo-lora32-${TAG}-full.bin" \
             --target-offset 0x0 \
-            0x0      build_lora32/bootloader/bootloader.bin \
+            0x1000   build_lora32/bootloader/bootloader.bin \
             0xf000   build_lora32/partition_table/partition-table.bin \
             0x375000 build_lora32/ota_data_initial.bin \
             0x10000  build_lora32/io-rts-esp32.bin \

@@ -2399,7 +2399,7 @@ static std::string overkiz_login(const std::string &email, const std::string &pa
     return ctx.session_cookie;
 }
 
-static std::string overkiz_get(const std::string &cookie, const std::string &path)
+static char *overkiz_get(const std::string &cookie, const std::string &path)
 {
     std::string url = "https://ha101-1.overkiz.com/enduser-mobile-web/enduserAPI/" + path;
     std::string cookie_hdr = "JSESSIONID=" + cookie;
@@ -2414,7 +2414,7 @@ static std::string overkiz_get(const std::string &cookie, const std::string &pat
     ctx.body = (char *)malloc(cap + 1);
     if (!ctx.body) {
         ESP_LOGW(TAG, "overkiz_get: OOM allocating body buffer (%zu free)", free_heap);
-        return "";
+        return nullptr;
     }
     ctx.body_cap = cap;
 
@@ -2427,7 +2427,7 @@ static std::string overkiz_get(const std::string &cookie, const std::string &pat
     cfg.user_data         = &ctx;
 
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
-    if (!client) return "";
+    if (!client) return nullptr;
     esp_http_client_set_header(client, "Cookie", cookie_hdr.c_str());
     esp_err_t err = esp_http_client_perform(client);
     int status    = esp_http_client_get_status_code(client);
@@ -2435,14 +2435,16 @@ static std::string overkiz_get(const std::string &cookie, const std::string &pat
 
     if (err != ESP_OK || status != 200) {
         ESP_LOGW(TAG, "overkiz_get %s: err=%s status=%d", path.c_str(), esp_err_to_name(err), status);
-        return "";
+        return nullptr;
     }
-    if (ctx.body_len == 0) return "";
+    if (ctx.body_len == 0) return nullptr;
     ctx.body[ctx.body_len] = '\0';
-    return std::string(ctx.body, ctx.body_len);  // ctx destructor frees ctx.body
+    char *result = ctx.body;
+    ctx.body = nullptr; // transfer ownership — ctx destructor must not free it
+    return result;
 }
 
-static std::string overkiz_get_devices(const std::string &cookie)
+static char *overkiz_get_devices(const std::string &cookie)
 {
     return overkiz_get(cookie, "setup/devices");
 }
@@ -2471,14 +2473,14 @@ static esp_err_t api_somfy_import_post(httpd_req_t *req)
         return ESP_OK;
     }
 
-    std::string json_str = overkiz_get_devices(cookie);
-    if (json_str.empty()) {
+    char *json_buf = overkiz_get_devices(cookie);
+    if (!json_buf) {
         send_result(req, false, "Failed to fetch device list from Somfy cloud");
         return ESP_OK;
     }
 
-    cJSON *src = cJSON_Parse(json_str.c_str());
-    std::string().swap(json_str);  // free raw buffer now; cJSON has its own copy
+    cJSON *src = cJSON_Parse(json_buf);
+    free(json_buf); // done with raw buffer; cJSON has its own copy
     if (!cJSON_IsArray(src)) {
         cJSON_Delete(src);
         send_result(req, false, "Unexpected response format from Somfy cloud");

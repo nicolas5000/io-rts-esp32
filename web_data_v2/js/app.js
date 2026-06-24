@@ -229,6 +229,18 @@
         if (app.elements.remotePopupButton) {
             app.elements.remotePopupButton.addEventListener("click", app.openAddRemotePopup);
         }
+        var remotesSection = document.getElementById("remotes-section");
+        var remotesSectionHdr = document.getElementById("remotes-section-hdr");
+        if (remotesSection && remotesSectionHdr) {
+            if (localStorage.getItem("remotes-section-open") === "1") {
+                remotesSection.classList.add("open");
+            }
+            remotesSectionHdr.addEventListener("click", function (e) {
+                if (e.target.closest("#remote-popup")) return;
+                var isOpen = remotesSection.classList.toggle("open");
+                localStorage.setItem("remotes-section-open", isOpen ? "1" : "0");
+            });
+        }
         if (app.elements.syslogUpdateButton) {
             app.elements.syslogUpdateButton.addEventListener("click", app.updateSyslogConfig);
         }

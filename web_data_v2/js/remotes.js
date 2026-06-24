@@ -21,6 +21,8 @@
         try {
             var remotes = await window.MiOpenApi.requestJson("/api/remotes");
             tbody.textContent = "";
+            var countEl = document.getElementById("remotes-count");
+            if (countEl) countEl.textContent = remotes.length ? "(" + remotes.length + ")" : "";
             if (!remotes.length) {
                 var row = document.createElement("tr");
                 var cell = document.createElement("td");

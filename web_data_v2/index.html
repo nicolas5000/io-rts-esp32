@@ -68,6 +68,29 @@
         <button class="view-add-btn" id="pair-device-btn" title="Pair new device">+</button>
       </div>
       <ul id="device-list"></ul>
+
+      <div id="remotes-section">
+        <div id="remotes-section-hdr">
+          <span id="remotes-chevron">&#9654;</span>
+          <span id="remotes-section-title" data-i18n="section.remotes">Remotes</span>
+          <span id="remotes-count"></span>
+          <button class="s-btn" id="remote-popup">+ Add</button>
+        </div>
+        <div id="remotes-body">
+          <div class="remotes-panel">
+            <table id="remote-table">
+              <thead>
+                <tr>
+                  <th data-i18n="table.remote_id">ID</th>
+                  <th data-i18n="table.linked_devices">Devices</th>
+                  <th data-i18n="table.edit">Edit</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
     </section>
 
     <!-- ── LOG VIEW ── -->
@@ -436,26 +459,6 @@
               <button class="s-btn" id="check-updates-btn">Check</button>
             </div>
           </div>
-        </div>
-      </div>
-
-      <!-- REMOTES -->
-      <div class="settings-group">
-        <div class="settings-group-label" data-i18n="section.remotes">Remotes</div>
-        <div style="display:flex;justify-content:flex-end;padding:0 4px 8px;">
-          <button class="s-btn" id="remote-popup">+ Add Remote</button>
-        </div>
-        <div class="remotes-panel">
-          <table id="remote-table">
-            <thead>
-              <tr>
-                <th data-i18n="table.remote_id">ID</th>
-                <th data-i18n="table.linked_devices">Devices</th>
-                <th data-i18n="table.edit">Edit</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
         </div>
       </div>
 

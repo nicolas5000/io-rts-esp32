@@ -1218,61 +1218,33 @@ namespace iohome
       ESP_LOGI(TAG, "WaitAndRespondToCmd28: CMD 28 from %s freq=%lu",
                buffToHexString(NODE_ID_SIZE, tahoma_node).c_str(), (unsigned long)tahoma_freq);
 
-      // Step 2: send CMD 31 directly — TaHoma in "receive key" mode uses CMD 28 as a beacon
-      // (broadcasts continuously, ignores CMD 29). Respond with CMD 31 to initiate key push.
-      IoFrame init_frame;
-      if (!create_init_transfer(init_frame, mOwnNodeId, tahoma_node)
-          || !TransmitFrame(init_frame, tahoma_freq, SHORT_PREAMBLE_LENGTH))
+      // Step 2: send CMD 29 — announce ourselves to TaHoma.
+      IoFrame resp29;
+      if (!create_discovery_response(resp29, mOwnNodeId, tahoma_node, 1023)
+          || !TransmitFrame(resp29, tahoma_freq, SHORT_PREAMBLE_LENGTH))
       {
-        IO_LOGE("WaitAndRespondToCmd28: failed to send CMD 31");
+        IO_LOGE("WaitAndRespondToCmd28: failed to send CMD 29");
         vTaskPrioritySet(NULL, savedPriority);
         xSemaphoreGive(sMutex);
         continue;
       }
-      ESP_LOGI(TAG, "WaitAndRespondToCmd28: CMD 31 sent — waiting for CMD 3C");
+      ESP_LOGI(TAG, "WaitAndRespondToCmd28: CMD 29 sent — waiting for TaHoma response");
 
-      // Step 4: wait for TaHoma's CMD 3C challenge.
-      uint8_t challenge[HMAC_SIZE];
+      // Step 3: log whatever TaHoma sends next so we can identify the expected command.
+      for (int i = 0; i < 5; i++)
       {
-        RxFrameQueueItem item3c;
-        if (!xQueueReceive(sRxIoQueue, &item3c, pdMS_TO_TICKS(2000))
-            || item3c.frame.command_id != CMD_CHALLENGE_REQUEST
-            || item3c.frame.data_len != HMAC_SIZE)
+        RxFrameQueueItem rx = {};
+        if (!xQueueReceive(sRxIoQueue, &rx, pdMS_TO_TICKS(2000)))
         {
-          ESP_LOGW(TAG, "WaitAndRespondToCmd28: no CMD 3C (got 0x%02X) — retrying", item3c.frame.command_id);
-          vTaskPrioritySet(NULL, savedPriority);
-          xSemaphoreGive(sMutex);
-          continue;
+          ESP_LOGI(TAG, "WaitAndRespondToCmd28: [%d] timeout — no frame", i);
+          break;
         }
-        memcpy(challenge, item3c.frame.data, HMAC_SIZE);
+        ESP_LOGI(TAG, "WaitAndRespondToCmd28: [%d] CMD 0x%02X from %s data[%u]=%s",
+                 i, rx.frame.command_id,
+                 buffToHexString(NODE_ID_SIZE, rx.frame.src_node).c_str(),
+                 rx.frame.data_len,
+                 buffToHexString(rx.frame.data_len, rx.frame.data).c_str());
       }
-      ESP_LOGI(TAG, "WaitAndRespondToCmd28: CMD 3C received challenge=%s",
-               buffToHexString(HMAC_SIZE, challenge).c_str());
-
-      // Step 5: send CMD 32 — encrypt our system key with the challenge and push it to TaHoma.
-      IoFrame key_frame;
-      if (!create_key_transfer(key_frame, init_frame, tahoma_node, mOwnNodeId, mSystemKey, challenge)
-          || !TransmitFrame(key_frame, tahoma_freq, SHORT_PREAMBLE_LENGTH))
-      {
-        IO_LOGE("WaitAndRespondToCmd28: failed to send CMD 32");
-        vTaskPrioritySet(NULL, savedPriority);
-        xSemaphoreGive(sMutex);
-        continue;
-      }
-      ESP_LOGI(TAG, "WaitAndRespondToCmd28: CMD 32 sent — waiting for CMD 33 confirmation");
-
-      // Step 6: wait for CMD 33 (TaHoma confirms key received).
-      RxFrameQueueItem confirmItem;
-      if (!xQueueReceive(sRxIoQueue, &confirmItem, RECEIVED_IO_TREATMENT_WAIT_TICKS)
-          || confirmItem.frame.command_id != CMD_KEY_TRANSFER_CONFIRMATION)
-      {
-        ESP_LOGW(TAG, "WaitAndRespondToCmd28: no CMD 33 confirmation (got 0x%02X) — retrying",
-                 confirmItem.frame.command_id);
-        vTaskPrioritySet(NULL, savedPriority);
-        xSemaphoreGive(sMutex);
-        continue;
-      }
-      ESP_LOGI(TAG, "WaitAndRespondToCmd28: CMD 33 received — key transfer complete");
 
       vTaskPrioritySet(NULL, savedPriority);
       xSemaphoreGive(sMutex);

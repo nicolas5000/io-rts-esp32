@@ -12,8 +12,8 @@ extern "C" {
 esp_err_t oled_init(void);
 
 /* Screen layout (rows 0-7):
- *  0  "[io-logo] control"      title
- *  1  "--------------------"   separator
+ *  0  "[io-logo] control      □"  title + network-status icon (ETH: RJ45,
+ *  1  "--------------------"       WiFi: RSSI bars or ?)
  *  2  "AABBCC ↑CMD ↓FE ███"    device line 0 (separator → 2px gap →)
  *  3  "AABBCC ↓FE      ███"    device line 1
  *  4  "AABBCC ↑CMD"            device line 2

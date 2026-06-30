@@ -13,6 +13,8 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdbool.h>
+#include "esp_wifi.h"
+#include "esp_netif.h"
 
 static const char *TAG = "oled";
 
@@ -178,7 +180,7 @@ static const uint8_t DEV_LINE_ROWS[MAX_DEV_LINES] = {2, 3, 4, 5};
 
 #define OLED_QUEUE_DEPTH 8
 
-typedef enum { OLED_EVT_TX, OLED_EVT_RX, OLED_EVT_STATUS, OLED_EVT_CLEAR_DEV } oled_evt_type_t;
+typedef enum { OLED_EVT_TX, OLED_EVT_RX, OLED_EVT_STATUS, OLED_EVT_CLEAR_DEV, OLED_EVT_NET_UPDATE } oled_evt_type_t;
 
 typedef struct {
     oled_evt_type_t type;
@@ -254,6 +256,27 @@ static void oled_draw_hline(uint8_t row, uint8_t pixel_row)
 
 /* ---- RSSI bar graph (3 vertical bars, right-aligned at cols 120-127) ---- */
 
+static const uint8_t RSSI_BARS[4][8] = {
+    {0x80,0x80,0x00,0x80,0x80,0x00,0x80,0x80},
+    {0xE0,0xE0,0x00,0x80,0x80,0x00,0x80,0x80},
+    {0xE0,0xE0,0x00,0xF8,0xF8,0x00,0x80,0x80},
+    {0xE0,0xE0,0x00,0xF8,0xF8,0x00,0xFE,0xFE},
+};
+
+/* ---- Network-status icons (8 x 8 px, column-oriented, bit 0 = top) ---- */
+
+#ifdef CONFIG_CONNECTIVITY_CHOICE_ETH
+/* RJ45 Ethernet connector */
+static const uint8_t icon_lan_on[8] = {
+    0x7F, 0x41, 0x1D, 0x3D, 0x3D, 0x1D, 0x41, 0x7F
+};
+#endif
+
+/* Question-mark glyph for "no connectivity configured" */
+static const uint8_t icon_lan_off[8] = {
+    0x04, 0x22, 0x41, 0x01, 0x08, 0x12, 0x24, 0x00
+};
+
 static void oled_draw_rssi_bars(uint8_t line[OLED_COLS], int rssi)
 {
     int level;
@@ -262,14 +285,51 @@ static void oled_draw_rssi_bars(uint8_t line[OLED_COLS], int rssi)
     else if (rssi >= -80)         level = 2;
     else if (rssi >= -95)         level = 1;
     else                          level = 0;
+    memcpy(&line[OLED_COLS - 8], RSSI_BARS[level], 8);
+}
 
-    static const uint8_t bars[4][8] = {
-        {0x80,0x80,0x00,0x80,0x80,0x00,0x80,0x80},
-        {0xE0,0xE0,0x00,0x80,0x80,0x00,0x80,0x80},
-        {0xE0,0xE0,0x00,0xF8,0xF8,0x00,0x80,0x80},
-        {0xE0,0xE0,0x00,0xF8,0xF8,0x00,0xFE,0xFE},
+/* ---- Header row: IO logo + "control" + right-aligned network icon ---- */
+
+/* Sentinel passed to oled_draw_header to indicate "no credentials configured" */
+#define RSSI_NO_CREDS 127
+
+static void oled_draw_header(int state)
+{
+    uint8_t line[OLED_COLS];
+    memset(line, 0, sizeof(line));
+    static const uint8_t logo_rows[][2] = {
+        {0xff, 0xf0}, {0x88, 0x10}, {0x88, 0x10}, {0x88, 0x10},
+        {0x88, 0x10}, {0x88, 0x10}, {0x8f, 0xf0}
     };
-    memcpy(&line[OLED_COLS - 8], bars[level], 8);
+    for (int col = 0; col < 12; col++) {
+        uint8_t byte = 0;
+        for (int row = 0; row < 7; row++) {
+            uint16_t r = ((uint16_t)logo_rows[row][0] << 8) | logo_rows[row][1];
+            if (r & (0x8000 >> col)) byte |= (1 << row);
+        }
+        line[col] = byte << 1;
+    }
+    int pos = 16;
+    const char *title = "control";
+    for (size_t i = 0; title[i]; i++) {
+        uint8_t c = (uint8_t)title[i];
+        if (c < 0x20 || c > 0x7F) c = 0x20;
+        memcpy(&line[pos + i * OLED_CHAR_W], font6x8[c - 0x20], OLED_CHAR_W);
+    }
+
+#ifdef CONFIG_CONNECTIVITY_CHOICE_ETH
+    memcpy(&line[OLED_COLS - 8], state ? icon_lan_on : icon_lan_off, 8);
+#else
+    if (state == RSSI_NO_CREDS)
+        memcpy(&line[OLED_COLS - 8], icon_lan_off, 8);
+    else
+        oled_draw_rssi_bars(line, state);
+#endif
+
+    send_cmd(0xB0 | 0);
+    send_cmd(0x00);
+    send_cmd(0x10);
+    send_data(line, OLED_COLS);
 }
 
 /* ---- Per-device line helpers ---- */
@@ -358,6 +418,8 @@ static void oled_render_dev_line(int slot)
 
 /* ---- Timer callback (fires every 2s) ---- */
 
+static int s_net_count = 0;
+
 static void periodic_cb(TimerHandle_t xTimer)
 {
     (void)xTimer;
@@ -365,6 +427,13 @@ static void periodic_cb(TimerHandle_t xTimer)
     evt.device_id[0] = '\0';
     evt.cmd_str[0] = '\0';
     xQueueSend(s_queue, &evt, 0);
+
+    s_net_count++;
+    if (s_net_count >= 15) {
+        s_net_count = 0;
+        oled_evt_t wevt = { .type = OLED_EVT_NET_UPDATE };
+        xQueueSend(s_queue, &wevt, 0);
+    }
 }
 
 /* ---- OLED task: sole owner of I2C after init ---- */
@@ -432,6 +501,31 @@ static void oled_task(void *arg)
             s_next_slot = (kept < MAX_DEV_LINES) ? kept : 0;
             for (int i = 0; i < MAX_DEV_LINES; i++)
                 oled_render_dev_line(i);
+            break;
+        }
+        case OLED_EVT_NET_UPDATE: {
+#ifdef CONFIG_CONNECTIVITY_CHOICE_ETH
+            esp_netif_t *eth = esp_netif_get_handle_from_ifkey("eth");
+            if (eth) {
+                esp_netif_ip_info_t ip;
+                oled_draw_header(esp_netif_get_ip_info(eth, &ip) == ESP_OK);
+            } else {
+                oled_draw_header(0);
+            }
+#else
+            wifi_ap_record_t ap;
+            int level;
+            if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
+                level = ap.rssi;
+            } else {
+                wifi_config_t cfg;
+                if (esp_wifi_get_config(WIFI_IF_STA, &cfg) == ESP_OK && cfg.sta.ssid[0])
+                    level = 0;
+                else
+                    level = RSSI_NO_CREDS;
+            }
+            oled_draw_header(level);
+#endif
             break;
         }
         }
@@ -504,33 +598,7 @@ esp_err_t oled_init(void)
         oled_print_line(p, NULL);
     memset(s_dev_lines, 0, sizeof(s_dev_lines));
     s_next_slot = 0;
-    /* 12x7 "IO" logo row-bitmap: 7 rows, each stored as 2 bytes (12 MSB bits used) */
-    static const uint8_t logo_rows[][2] = {
-        {0xff, 0xf0}, {0x88, 0x10}, {0x88, 0x10}, {0x88, 0x10},
-        {0x88, 0x10}, {0x88, 0x10}, {0x8f, 0xf0}
-    };
-    uint8_t line[OLED_COLS];
-    memset(line, 0, sizeof(line));
-    /* Transpose rows→columns for SSD1306 (bit 0 = top pixel) */
-    for (int col = 0; col < 12; col++) {
-        uint8_t byte = 0;
-        for (int row = 0; row < 7; row++) {
-            uint16_t r = ((uint16_t)logo_rows[row][0] << 8) | logo_rows[row][1];
-            if (r & (0x8000 >> col)) byte |= (1 << row);
-        }
-        line[col] = byte << 1;
-    }
-    int pos = 12 + 4; /* logo + 2px gap + 2px shift */
-    const char *title = "control";
-    for (size_t i = 0; title[i]; i++) {
-        uint8_t c = (uint8_t)title[i];
-        if (c < 0x20 || c > 0x7F) c = 0x20;
-        memcpy(&line[pos + i * OLED_CHAR_W], font6x8[c - 0x20], OLED_CHAR_W);
-    }
-    send_cmd(0xB0 | 0);
-    send_cmd(0x00);
-    send_cmd(0x10);
-    send_data(line, OLED_COLS);
+    oled_draw_header(0);
     oled_draw_hline(1, 3);
     oled_draw_hline(6, 3);
 

@@ -14,6 +14,7 @@
 #include <stdbool.h>
 #include "esp_wifi.h"
 #include "esp_netif.h"
+#include "esp_app_desc.h"
 
 static const char *TAG = "oled";
 
@@ -200,6 +201,7 @@ static oled_dev_line_t s_dev_lines[MAX_DEV_LINES];
 static int s_next_slot = 0;
 
 static TickType_t s_status_time = 0;
+static char s_version_str[9] = "v0.00.00";
 
 
 /* ---- Low-level I2C helpers (called only from oled_task or init) ---- */
@@ -232,6 +234,49 @@ static void oled_print_line(uint8_t row, const char *text)
         }
     }
     send_cmd(0xB0 | row);
+    send_cmd(0x00);
+    send_cmd(0x10);
+    send_data(line, OLED_COLS);
+}
+
+static void oled_init_version(void)
+{
+    const esp_app_desc_t *desc = esp_app_get_description();
+    int major = 0, minor = 0, patch = 0;
+    const char *v = desc->version;
+    if (v[0] == 'v' || v[0] == 'V') v++;
+    sscanf(v, "%d.%d.%d", &major, &minor, &patch);
+    snprintf(s_version_str, sizeof(s_version_str), "v%d.%d.%d", major, minor, patch);
+}
+
+static void oled_render_status_line(const char *msg)
+{
+    if (s_dev == NULL) return;
+
+    uint8_t line[OLED_COLS];
+    memset(line, 0, sizeof(line));
+
+    if (msg && msg[0]) {
+        size_t ver_chars = strlen(s_version_str);
+        size_t max_chars = (OLED_COLS - (int)(ver_chars * OLED_CHAR_W)) / OLED_CHAR_W;
+        size_t len = strlen(msg);
+        if (len > max_chars) len = max_chars;
+        for (size_t i = 0; i < len; i++) {
+            uint8_t c = (uint8_t)msg[i];
+            if (c < 0x20 || c > 0x7F) c = 0x20;
+            memcpy(&line[i * OLED_CHAR_W], font6x8[c - 0x20], OLED_CHAR_W);
+        }
+    }
+
+    size_t ver_len = strlen(s_version_str);
+    int start = OLED_COLS - (int)(ver_len * OLED_CHAR_W);
+    for (size_t i = 0; i < ver_len; i++) {
+        uint8_t c = (uint8_t)s_version_str[i];
+        if (c < 0x20 || c > 0x7F) c = 0x20;
+        memcpy(&line[start + i * OLED_CHAR_W], font6x8[c - 0x20], OLED_CHAR_W);
+    }
+
+    send_cmd(0xB0 | 7);
     send_cmd(0x00);
     send_cmd(0x10);
     send_data(line, OLED_COLS);
@@ -418,7 +463,6 @@ static void oled_task(void *arg)
 {
     (void)arg;
     oled_evt_t evt;
-    char buf[22];
     TickType_t last_cleanup = 0;
     TickType_t last_net_update = 0;
     for (;;) {
@@ -450,9 +494,8 @@ static void oled_task(void *arg)
                 break;
             }
             case OLED_EVT_STATUS:
-                snprintf(buf, sizeof(buf), "%.21s", evt.cmd_str);
-                oled_print_line(7, buf[0] ? buf : NULL);
-                s_status_time = buf[0] ? xTaskGetTickCount() : 0;
+                oled_render_status_line(evt.cmd_str);
+                s_status_time = evt.cmd_str[0] ? xTaskGetTickCount() : 0;
                 break;
             }
         }
@@ -463,7 +506,7 @@ static void oled_task(void *arg)
             last_cleanup = now;
             if (s_status_time && (now - s_status_time) >= pdMS_TO_TICKS(4000)) {
                 s_status_time = 0;
-                oled_print_line(7, NULL);
+                oled_render_status_line("");
             }
             TickType_t timeout = pdMS_TO_TICKS(30000);
             for (int i = 0; i < MAX_DEV_LINES; i++) {
@@ -583,6 +626,8 @@ esp_err_t oled_init(void)
     oled_draw_header(0);
     oled_draw_hline(1, 3);
     oled_draw_hline(6, 3);
+    oled_init_version();
+    oled_render_status_line("");
 
     /* Create queue and task — all I2C access goes through the task from here */
     s_queue = xQueueCreateStatic(OLED_QUEUE_DEPTH, sizeof(oled_evt_t),

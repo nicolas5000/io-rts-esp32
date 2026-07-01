@@ -19,7 +19,7 @@ esp_err_t oled_init(void);
  *  4  "AABBCC ↑CMD"            device line 2
  *  5  "AABBCC ↑CMD ↓FE ███"    device line 3
  *  6  "--------------------"   separator
- *  7  "Ready"                  transient status msg
+ *  7  "Ready       v2.00.16"   transient status msg + right-aligned fw version
  *
  * Each device line occupies a full 8-pixel page but only uses the top 6 rows,
  * leaving 2 blank pixel rows at the bottom for vertical spacing.

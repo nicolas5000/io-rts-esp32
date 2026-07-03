@@ -67,6 +67,12 @@ namespace IoRts
         /// @return true on success
         bool SetTransitTime(const std::string &deviceID, uint32_t transit_time_ms);
 
+        /// @brief Set quiet mode for a device (persists to storage)
+        /// @param deviceID Device ID
+        /// @param quiet true for slower, quieter motor operation
+        /// @return true on success
+        bool SetQuiet(const std::string &deviceID, bool quiet);
+
         /// @brief Schedule a confirmation poll for a device after its estimated stop time
         /// @param deviceID Device ID
         /// @param transit_time_ms Transit time (0 = use 60 s fallback)
@@ -97,6 +103,9 @@ namespace IoRts
 
         /// @brief Start MQTT client immediately (if enabled and not already started)
         void TriggerMqttStart();
+
+        /// @brief Restart MQTT client with current NVS config — safe to call when already running
+        void TriggerMqttRestart();
 
     private:
         bool mIoPassive = false; // current configuration, initialized at boot

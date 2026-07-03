@@ -69,6 +69,9 @@ namespace Helpers
         /// @brief Called on MQTT_EVENT_DISCONNECTED — schedules reconnect if network is up
         void OnMqttDisconnected();
 
+        /// @brief Restart MQTT client with current NVS config — safe to call when already running
+        esp_err_t RestartMqttClient();
+
         bool IsMqttConnected() const { return mMqttConnected; }
 
         enum class MqttState { DISABLED, CONNECTING, CONNECTED, DISCONNECTED, ERROR };
@@ -90,7 +93,8 @@ namespace Helpers
         // mIsIoHomePassive removed — use IoHomeConfig::isPassiveModeEnabled() for live reads
         std::string mTopicPrefix;                   // Topic prefix, initialized from configuration storage at boot (avoid to read it from storage everytime!)
         std::string mDiscoveryPrefix;               // Discovery prefix, initialized from configuration storage at boot (avoid to read it from storage everytime!)
-        esp_mqtt_client_handle_t mMqttClientHandle; // Handle on MQTT client
-        esp_timer_handle_t mReconnectTimer;         // One-shot timer for broker-drop reconnect
+        esp_mqtt_client_handle_t mMqttClientHandle;  // Handle on MQTT client
+        esp_timer_handle_t mReconnectTimer;          // One-shot timer for broker-drop reconnect
+        bool mNetworkHandlersRegistered = false;     // True once network event handlers are registered
     };
 }

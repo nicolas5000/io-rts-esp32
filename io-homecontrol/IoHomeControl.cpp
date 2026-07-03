@@ -21,6 +21,7 @@
 #include <ios>
 #include <sstream>
 #include <map>
+#include <vector>
 #include <list>
 #include <iostream>
 #include <iomanip>
@@ -400,7 +401,7 @@ namespace iohome
 
     // Create IoDevice status queue and task
     sIoDeviceStatusQueue = xQueueCreate(20, sizeof(IoDevice));
-    xTaskCreate(process_iodevicestatus_task, "process_iodevicestatus_task", 4096, NULL, DEVICE_STATUS_CALLBACK_PRIORITY, NULL);
+    xTaskCreate(process_iodevicestatus_task, "process_iodevicestatus_task", 8192, NULL, DEVICE_STATUS_CALLBACK_PRIORITY, NULL);
 
     // Initialize mutex
     sMutex = xSemaphoreCreateMutexStatic(&sMutexBuffer);
@@ -412,10 +413,14 @@ namespace iohome
     // create queues to handle IO frames
     sRxIoQueue = xQueueCreate(10, sizeof(RxFrameQueueItem));
     sTxIoQueue = xQueueCreate(10, sizeof(TxFrameQueueItem));
-    // start frame task
+    // High-priority tasks (P8/P6/P4) are started later via StartTasks(),
+    // after LoadIoDevicesFromStorage() has populated sDeviceMap.
+  }
+
+  void IoHomeControl::StartTasks()
+  {
     xTaskCreate(process_radio_task, "process_radio_task", 4096, this, RADIO_FRAME_PROCESSING_PRIORITY, NULL);
     xTaskCreate(process_ioframe_task, "process_ioframe_task", 4096, this, IO_FRAME_PROCESSING_TASK, NULL);
-    // start status update task
     xTaskCreate(update_devices_status_task, "update_devices_status_task", 4096, this, DEVICE_STATUS_UPDATE_PRIORITY, NULL);
   }
 
@@ -562,16 +567,15 @@ namespace iohome
     {
       if (xSemaphoreTake(sMutex, MUTEX_MAX_WAIT_TICKS))
       {
-        // Auto-stop key sniffing after timeout
-        if (sSniffKeyActive && (esp_timer_get_time() - sSniffStartUs) > KEY_SNIFF_TIMEOUT_US)
-        {
-          sSniffKeyActive = false;
-          IO_LOGI("Key sniffing timed out after 120 s");
-        }
         RxFrameQueueItem item;
-        while (xQueueReceive(sRxIoQueue, &item, RECEIVED_IO_TREATMENT_WAIT_TICKS))
+        if (xQueueReceive(sRxIoQueue, &item, RECEIVED_IO_TREATMENT_WAIT_TICKS))
         {
-          // Process frame internally (discovery, authentication, status, ...)
+          // Auto-stop key sniffing after timeout
+          if (sSniffKeyActive && (esp_timer_get_time() - sSniffStartUs) > KEY_SNIFF_TIMEOUT_US)
+          {
+            sSniffKeyActive = false;
+            IO_LOGI("Key sniffing timed out after 120 s");
+          }
           std::string dstDevice = buffToHexString(NODE_ID_SIZE, item.frame.dest_node);
           std::string srcDevice = buffToHexString(NODE_ID_SIZE, item.frame.src_node);
           switch (item.frame.command_id)
@@ -702,6 +706,8 @@ namespace iohome
                   }
                 }
               }
+              if (sUnknownSenderCallback != nullptr)
+                sUnknownSenderCallback(srcDevice); // lets capture window detect already-linked remotes
             }
             else if (sUnknownSenderCallback != nullptr)
             {
@@ -712,7 +718,7 @@ namespace iohome
           }
         }
         xSemaphoreGive(sMutex);
-        vTaskDelay(pdMS_TO_TICKS(5)); // If we have no more received frame to process, perhaps we have orders to execute!
+        vTaskDelay(pdMS_TO_TICKS(5)); // yield so P4/httpd can acquire mutex between frames
       }
       else
       {
@@ -727,52 +733,74 @@ namespace iohome
     {
       if (!isPassive()) // not passive, check if we should update some device status!
       {
-        for (std::map<std::string, IoDevice>::iterator it = sDeviceMap.begin(); it != sDeviceMap.end(); it++)
+        // Snapshot device IDs under mutex to avoid iterating sDeviceMap concurrently with
+        // insertions (RestoreDevice) or field writes (ProcessReceivedFrameTask).
+        std::vector<std::string> deviceIds;
+        if (xSemaphoreTake(sMutex, MUTEX_MAX_WAIT_TICKS))
         {
-          if (memcmp(it->second.info.node_id, mOwnNodeId, NODE_ID_SIZE) == 0)
+          for (const auto &kv : sDeviceMap)
+            deviceIds.push_back(kv.first);
+          xSemaphoreGive(sMutex);
+        }
+
+        for (const auto &devId : deviceIds)
+        {
+          // Read device state under mutex to avoid data race with ProcessReceivedFrameTask writes.
+          bool ownNode = false, isDeleted = false, needsName = false, needsType = false, shouldUpdate = false;
+          if (xSemaphoreTake(sMutex, MUTEX_MAX_WAIT_TICKS))
           {
-            IO_LOGE("UpdateDevicesStatusTask: device {} has node_id equal to own node ID — skipping!", it->first);
+            auto it = sDeviceMap.find(devId);
+            if (it != sDeviceMap.end())
+            {
+              ownNode      = (memcmp(it->second.info.node_id, mOwnNodeId, NODE_ID_SIZE) == 0);
+              isDeleted    = it->second.is_deleted;
+              needsName    = !ownNode && !isDeleted && (strlen(it->second.info.name) <= 1);
+              needsType    = !ownNode && !isDeleted && (it->second.info.device_type == DeviceType::UNKNOWN);
+              shouldUpdate = !ownNode && !isDeleted &&
+                             ((esp_timer_get_time() > it->second.last_status_timestamp + STATUS_UPDATE_MAX_TIME_US) ||
+                              (it->second.next_status_update_timestamp < esp_timer_get_time()));
+            }
+            xSemaphoreGive(sMutex);
+          }
+
+          if (ownNode)
+          {
+            IO_LOGE("UpdateDevicesStatusTask: device {} has node_id equal to own node ID — skipping!", devId);
             continue;
           }
-          if (!it->second.is_deleted &&                                                              // device is not marked deleted and
-              ((esp_timer_get_time() > it->second.last_status_timestamp + STATUS_UPDATE_MAX_TIME_US) // previous update is a long time ago
-               || (it->second.next_status_update_timestamp < esp_timer_get_time())))                 // or we know that we should update due to previous status received
+          if (!shouldUpdate && !needsName && !needsType) continue;
+
+          if (needsName) DeviceGetName(devId);
+          // DeviceGetGeneralInfo1 / DeviceGetGeneralInfo3 reserved for future use
+          if (needsType) DeviceGetGeneralInfo2(devId);
+
+          if (shouldUpdate)
           {
-            if (strlen(it->second.info.name) <= 1) // at init (covers "" and "?" placeholder)
-            {
-              DeviceGetName(it->first);
-            }
-            if (strlen(it->second.info.info1) == 0) // at init
-            {
-              // DeviceGetGeneralInfo1(it->first); // contains some product number / model number / CIE?
-              // DeviceGetGeneralInfo3(it->first); // not interesting until we know what the response contains!
-            }
-            if (it->second.info.device_type == DeviceType::UNKNOWN) // at init
-            {
-              DeviceGetGeneralInfo2(it->first); // contains some product number / model number / CIE? + device type and subtype!
-            }
-            // So let's update device status
             if (xSemaphoreTake(sMutex, MUTEX_MAX_WAIT_TICKS))
             {
-              IoFrame request;
-              IoFrame response;
-              bool reqOk;
-              if (deviceTypeSupportsTilt(it->second.info.device_type))
-                reqOk = create_getstatus03_tilt_request(request, mOwnNodeId, it->second.info.node_id);
-              else
-                reqOk = create_getstatus03_request(request, mOwnNodeId, it->second.info.node_id);
-              UBaseType_t currentPriority = uxTaskPriorityGet(NULL);
-              vTaskPrioritySet(NULL, IO_FRAME_PROCESSING_TASK);
-              bool exchangeOk = reqOk && SendAndReceive(request, response, FREQUENCY_CHANNEL_2);
-              vTaskPrioritySet(NULL, currentPriority);
-              if (exchangeOk)
+              auto dev = sDeviceMap.find(devId);
+              if (dev != sDeviceMap.end() && !dev->second.is_deleted)
               {
-                UpdateDeviceStatus(response);
-              }
-              else
-              {
-                IO_LOGE("UpdateDevicesStatusTask: failed to send request or get response!");
-                it->second.next_status_update_timestamp = esp_timer_get_time() + STATUS_UPDATE_NEXT_TRY_US; // retry later
+                IoFrame request;
+                IoFrame response;
+                bool reqOk;
+                if (deviceTypeSupportsTilt(dev->second.info.device_type))
+                  reqOk = create_getstatus03_tilt_request(request, mOwnNodeId, dev->second.info.node_id);
+                else
+                  reqOk = create_getstatus03_request(request, mOwnNodeId, dev->second.info.node_id);
+                UBaseType_t currentPriority = uxTaskPriorityGet(NULL);
+                vTaskPrioritySet(NULL, IO_FRAME_PROCESSING_TASK);
+                bool exchangeOk = reqOk && SendAndReceive(request, response, FREQUENCY_CHANNEL_2);
+                vTaskPrioritySet(NULL, currentPriority);
+                if (exchangeOk)
+                {
+                  UpdateDeviceStatus(response);
+                }
+                else
+                {
+                  IO_LOGE("UpdateDevicesStatusTask: failed to send request or get response!");
+                  dev->second.next_status_update_timestamp = esp_timer_get_time() + STATUS_UPDATE_NEXT_TRY_US;
+                }
               }
               xSemaphoreGive(sMutex);
             }
@@ -819,13 +847,13 @@ namespace iohome
 
   void IoHomeControl::RestoreDevice(const std::string &deviceID, const iohome::IoDevice &device)
   {
-    if (!sDeviceMap.contains(deviceID))
+    if (xSemaphoreTake(sMutex, MUTEX_MAX_WAIT_TICKS))
     {
-      sDeviceMap.insert({deviceID, device});
-    }
-    else
-    {
-      IO_LOGE("RestoreDevice: can't restore a device that already exists!");
+      if (!sDeviceMap.contains(deviceID))
+        sDeviceMap.insert({deviceID, device});
+      else
+        IO_LOGE("RestoreDevice: can't restore a device that already exists!");
+      xSemaphoreGive(sMutex);
     }
   }
 
@@ -834,19 +862,21 @@ namespace iohome
     std::string deviceID(tmpDeviceID.length(), '0'); // init avoiding C++ 3133 warning
     std::transform(tmpDeviceID.begin(), tmpDeviceID.end(), deviceID.begin(), [](unsigned char c)
                    { return std::toupper(c); }); // convert to uppercase
-    auto it = sDeviceMap.find(deviceID);
-    if (it != sDeviceMap.end())
+    if (xSemaphoreTake(sMutex, MUTEX_MAX_WAIT_TICKS))
     {
-      it->second.is_deleted = true;
+      auto it = sDeviceMap.find(deviceID);
+      if (it != sDeviceMap.end())
+        it->second.is_deleted = true;
+      xSemaphoreGive(sMutex);
     }
   }
 
-  bool IoHomeControl::DiscoverAndPairDevice()
+  PairResult IoHomeControl::DiscoverAndPairDevice()
   {
     if (!mInitialized || !mReceiving || mPassiveMode)
     {
       IO_LOGE("DiscoverAndPairDevice: invalid state! (not initialized or not listening or passive mode)");
-      return false;
+      return PairResult::FAILED_NO_RESPONSE;
     }
 
     if (xSemaphoreTake(sMutex, MUTEX_MAX_WAIT_TICKS))
@@ -855,7 +885,7 @@ namespace iohome
       IoFrame response;
       IoDevice device;
       RxFrameQueueItem rxItem;
-      bool ret = false;
+      PairResult result = PairResult::FAILED_NO_RESPONSE;
       UBaseType_t currentPriority = uxTaskPriorityGet(NULL);
       vTaskPrioritySet(NULL, IO_FRAME_PROCESSING_TASK); // change task priority to higher!
       // Send discovery request
@@ -864,23 +894,28 @@ namespace iohome
           && xQueueReceive(sRxIoQueue, &rxItem, RECEIVED_IO_DISCOVERY_RESPONSE_WAIT_TICKS) && (rxItem.frame.command_id == CMD_DISCOVER_RESPONSE) // expected answer
           && process_discovery_response(rxItem.frame, device))                                                                                   // discovery response parsing OK
       {
-        // We have discovered a device, let's start pairing process
-        if (create_init_transfer(request, mOwnNodeId, device.info.node_id)        // request created
-            && TransmitFrame(request, FREQUENCY_CHANNEL_2, LONG_PREAMBLE_LENGTH)) // send OK
+        // Confirm discovery with device (CMD 2C → 2D) before key exchange
+        if (create_discovery_confirmation_request(request, mOwnNodeId, device.info.node_id) // request created
+            && SendAndReceive(request, response, FREQUENCY_CHANNEL_2)                       // send OK, received something
+            && (response.command_id == CMD_DISCOVER_CONFIRMATION_ACK))                      // expected answer (CMD 2D)
         {
-          // We have sent key init request, let's get challenge from device
-          if (xQueueReceive(sRxIoQueue, &rxItem, RECEIVED_IO_TREATMENT_WAIT_TICKS))
+          // We have confirmed discovery, let's start pairing process
+          if (create_init_transfer(request, mOwnNodeId, device.info.node_id)        // request created
+              && TransmitFrame(request, FREQUENCY_CHANNEL_2, LONG_PREAMBLE_LENGTH)) // send OK
           {
-            // We have a response, check it
-            if (memcmp(rxItem.frame.src_node, device.info.node_id, NODE_ID_SIZE) != 0 // same device?
-                || memcmp(rxItem.frame.dest_node, mOwnNodeId, NODE_ID_SIZE) != 0      // for us?
-                || rxItem.frame.command_id != CMD_CHALLENGE_REQUEST                   // expected answer ID?
-                || rxItem.frame.data_len != HMAC_SIZE)                                // expected answer data?
+            // We have sent key init request, let's get challenge from device
+            if (xQueueReceive(sRxIoQueue, &rxItem, RECEIVED_IO_TREATMENT_WAIT_TICKS))
             {
-              IO_LOGE("DiscoverAndPairDevice: failed to confirm discovery!");
-            }
-            else
-            {
+              // We have a response, check it
+              if (memcmp(rxItem.frame.src_node, device.info.node_id, NODE_ID_SIZE) != 0 // same device?
+                  || memcmp(rxItem.frame.dest_node, mOwnNodeId, NODE_ID_SIZE) != 0      // for us?
+                  || rxItem.frame.command_id != CMD_CHALLENGE_REQUEST                   // expected answer ID?
+                  || rxItem.frame.data_len != HMAC_SIZE)                                // expected answer data?
+              {
+                IO_LOGE("DiscoverAndPairDevice: failed to confirm discovery!");
+              }
+              else
+              {
               // We have received a challenge, let's send our key!
               IoFrame keyTransfer;
               if (create_key_transfer(keyTransfer, request, device.info.node_id, mOwnNodeId, mSystemKey, rxItem.frame.data) // request created
@@ -892,7 +927,7 @@ namespace iohome
                 device.is_deleted = false;
                 sDeviceMap.insert({deviceID, device});
                 IO_LOGI("DiscoverAndPairDevice: device {} added!", deviceID);
-                ret = true;
+                result = PairResult::PAIRED_FULL;
                 // Now try to find "sub devices" (like a light or switch on DexxoSmartio800)
                 if (create_discoveryspe_request(request, mOwnNodeId, mSystemKey)          // request created
                     && TransmitFrame(request, FREQUENCY_CHANNEL_2, LONG_PREAMBLE_LENGTH)) // send OK
@@ -943,32 +978,55 @@ namespace iohome
               }
               else
               {
-                IO_LOGE("DiscoverAndPairDevice: failed to send key / no or bad answer received!");
+                // Key exchange failed — device may already share our key (re-pairing scenario).
+                // Add provisionally and verify with CMD 03. Already holding sMutex — call low-level directly.
+                std::string deviceID = buffToHexString(NODE_ID_SIZE, device.info.node_id);
+                device.is_deleted = false;
+                sDeviceMap.insert({deviceID, device});
+                IoFrame statusReq, statusResp;
+                if (create_getstatus03_request(statusReq, mOwnNodeId, device.info.node_id)
+                    && SendAndReceive(statusReq, statusResp, FREQUENCY_CHANNEL_2)
+                    && statusResp.command_id == CMD_PRIVATE_RESPONSE)
+                {
+                  IO_LOGI("DiscoverAndPairDevice: shortcut verified — device {} responds to CMD 03, shared key confirmed", deviceID);
+                  result = PairResult::PAIRED_SHORTCUT_VERIFIED;
+                }
+                else
+                {
+                  IO_LOGE("DiscoverAndPairDevice: CMD 03 no response — device {} has a different key, factory reset required", deviceID);
+                  sDeviceMap.erase(deviceID);
+                  result = PairResult::FAILED_KEY_MISMATCH;
+                }
               }
+            }
+          }
+              else
+              {
+                IO_LOGE("DiscoverAndPairDevice: no answer received to key init request!");
+              }
+            }
+            else
+            {
+              IO_LOGE("DiscoverAndPairDevice: failed to send key init request!");
             }
           }
           else
           {
-            IO_LOGE("DiscoverAndPairDevice: no answer received to key init request!");
+            IO_LOGE("DiscoverAndPairDevice: failed to confirm discovery (CMD 2C/2D)!");
           }
         }
         else
         {
-          IO_LOGE("DiscoverAndPairDevice: failed to send key init request!");
-        }
-      }
-      else
-      {
-        IO_LOGE("DiscoverAndPairDevice: failed to send discovery request / no or bad answer received!");
+          IO_LOGE("DiscoverAndPairDevice: failed to send discovery request / no or bad answer received!");
       }
       vTaskPrioritySet(NULL, currentPriority); // restore task priority
       xSemaphoreGive(sMutex);
-      return ret;
+      return result;
     }
     else
     {
       IO_LOGE("DiscoverAndPairDevice: failed to take mutex!");
-      return false;
+      return PairResult::FAILED_NO_RESPONSE;
     }
   }
 
@@ -1160,72 +1218,33 @@ namespace iohome
       ESP_LOGI(TAG, "WaitAndRespondToCmd28: CMD 28 from %s freq=%lu",
                buffToHexString(NODE_ID_SIZE, tahoma_node).c_str(), (unsigned long)tahoma_freq);
 
-      // Respond with CMD 29 using controller device type 1023 (0x3FF → data bytes FF C0)
-      IoFrame resp;
-      if (!create_discovery_response(resp, mOwnNodeId, tahoma_node, 1023)
-          || !TransmitFrame(resp, tahoma_freq, SHORT_PREAMBLE_LENGTH))
+      // Step 2: send CMD 29 — announce ourselves to TaHoma.
+      IoFrame resp29;
+      if (!create_discovery_response(resp29, mOwnNodeId, tahoma_node, 1023)
+          || !TransmitFrame(resp29, tahoma_freq, SHORT_PREAMBLE_LENGTH))
       {
         IO_LOGE("WaitAndRespondToCmd28: failed to send CMD 29");
         vTaskPrioritySet(NULL, savedPriority);
         xSemaphoreGive(sMutex);
         continue;
       }
-      ESP_LOGI(TAG, "WaitAndRespondToCmd28: CMD 29 sent — sending CMD 31 to request key exchange");
+      ESP_LOGI(TAG, "WaitAndRespondToCmd28: CMD 29 sent — waiting for TaHoma response");
 
-      // Step 2: send CMD 31 to request TaHoma challenges us and shares its key.
-      IoFrame init_frame;
-      if (!create_init_transfer(init_frame, mOwnNodeId, tahoma_node)
-          || !TransmitFrame(init_frame, tahoma_freq, SHORT_PREAMBLE_LENGTH))
+      // Step 3: log whatever TaHoma sends next so we can identify the expected command.
+      for (int i = 0; i < 5; i++)
       {
-        IO_LOGE("WaitAndRespondToCmd28: failed to send CMD 31");
-        vTaskPrioritySet(NULL, savedPriority);
-        xSemaphoreGive(sMutex);
-        continue;
-      }
-      ESP_LOGI(TAG, "WaitAndRespondToCmd28: CMD 31 sent — waiting for CMD 3C");
-
-      // Step 3: wait for TaHoma's CMD 3C challenge.
-      uint8_t challenge[HMAC_SIZE];
-      {
-        RxFrameQueueItem item3c;
-        if (!xQueueReceive(sRxIoQueue, &item3c, pdMS_TO_TICKS(2000))
-            || item3c.frame.command_id != CMD_CHALLENGE_REQUEST
-            || item3c.frame.data_len != HMAC_SIZE)
+        RxFrameQueueItem rx = {};
+        if (!xQueueReceive(sRxIoQueue, &rx, pdMS_TO_TICKS(2000)))
         {
-          ESP_LOGW(TAG, "WaitAndRespondToCmd28: no CMD 3C (got 0x%02X) — retrying", item3c.frame.command_id);
-          vTaskPrioritySet(NULL, savedPriority);
-          xSemaphoreGive(sMutex);
-          continue;
+          ESP_LOGI(TAG, "WaitAndRespondToCmd28: [%d] timeout — no frame", i);
+          break;
         }
-        memcpy(challenge, item3c.frame.data, HMAC_SIZE);
+        ESP_LOGI(TAG, "WaitAndRespondToCmd28: [%d] CMD 0x%02X from %s data[%u]=%s",
+                 i, rx.frame.command_id,
+                 buffToHexString(NODE_ID_SIZE, rx.frame.src_node).c_str(),
+                 rx.frame.data_len,
+                 buffToHexString(rx.frame.data_len, rx.frame.data).c_str());
       }
-      ESP_LOGI(TAG, "WaitAndRespondToCmd28: CMD 3C received challenge=%s",
-               buffToHexString(HMAC_SIZE, challenge).c_str());
-
-      // Step 4: send CMD 32 — encrypt our system key with the challenge and push it to TaHoma.
-      IoFrame key_frame;
-      if (!create_key_transfer(key_frame, init_frame, tahoma_node, mOwnNodeId, mSystemKey, challenge)
-          || !TransmitFrame(key_frame, tahoma_freq, SHORT_PREAMBLE_LENGTH))
-      {
-        IO_LOGE("WaitAndRespondToCmd28: failed to send CMD 32");
-        vTaskPrioritySet(NULL, savedPriority);
-        xSemaphoreGive(sMutex);
-        continue;
-      }
-      ESP_LOGI(TAG, "WaitAndRespondToCmd28: CMD 32 sent — waiting for CMD 33 confirmation");
-
-      // Step 5: wait for CMD 33 (TaHoma confirms key received).
-      RxFrameQueueItem confirmItem;
-      if (!xQueueReceive(sRxIoQueue, &confirmItem, RECEIVED_IO_TREATMENT_WAIT_TICKS)
-          || confirmItem.frame.command_id != CMD_KEY_TRANSFER_CONFIRMATION)
-      {
-        ESP_LOGW(TAG, "WaitAndRespondToCmd28: no CMD 33 confirmation (got 0x%02X) — retrying",
-                 confirmItem.frame.command_id);
-        vTaskPrioritySet(NULL, savedPriority);
-        xSemaphoreGive(sMutex);
-        continue;
-      }
-      ESP_LOGI(TAG, "WaitAndRespondToCmd28: CMD 33 received — key transfer complete");
 
       vTaskPrioritySet(NULL, savedPriority);
       xSemaphoreGive(sMutex);

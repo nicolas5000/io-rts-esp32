@@ -80,7 +80,7 @@
         const showTiming = !!popupOptions.showTiming;
         labelTiming.style.display = showTiming ? "block" : "none";
         inputTiming.style.display = showTiming ? "block" : "none";
-        labelTiming.textContent = popupOptions.timingLabel || "timing:";
+        labelTiming.textContent = popupOptions.timingLabel || (window.t ? window.t("popup.label_timing") : "timing:");
         inputTiming.value = showTiming ? (popupOptions.defaultTiming || "") : "";
 
         deleteBtn.style.display = popupOptions.btnShowDelete ? "block" : "none";
@@ -125,7 +125,7 @@
 
         if (popupOptions.onPair) {
             pairBtn.style.display = "block";
-            pairBtn.textContent = popupOptions.pairBtnName || "Pair";
+            pairBtn.textContent = popupOptions.pairBtnName || (window.t ? window.t("button.pair") : "Pair");
             pairBtn.onclick = function () {
                 const selectedDevice = showDevicePopup ? devicePopup.value : undefined;
                 closePopup();
@@ -138,7 +138,7 @@
 
         if (popupOptions.onUnpair) {
             unPairBtn.style.display = "block";
-            unPairBtn.textContent = popupOptions.unpairBtnName || "Unpair";
+            unPairBtn.textContent = popupOptions.unpairBtnName || (window.t ? window.t("button.unpair") : "Unpair");
             unPairBtn.onclick = function () {
                 if (destructiveActionsBlocked()) {
                     showProtectedMessage();
@@ -176,7 +176,7 @@
                 deleteInfo.textContent = popupOptions.deleteInfo ||
                     app.i18nText("popup.unpair_before_delete", "Unpair devices first before deleting.");
                 confirmBtn.style.display = "inline-block";
-                confirmBtn.textContent = "Confirm";
+                confirmBtn.textContent = window.t ? window.t("button.confirm") : "Confirm";
                 confirmBtn.onclick = async function () {
                     if (destructiveActionsBlocked()) {
                         showProtectedMessage();

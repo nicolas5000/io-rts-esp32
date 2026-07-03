@@ -195,8 +195,12 @@ namespace IoRts
         sIoRtsManager = this;
         // Initialize IO objects
         InitializeIo();
-        // Load devices from flash storage
+        // Load devices from flash storage — runs before high-priority tasks start
+        // so RestoreDevice can acquire sMutex without contention.
         LoadIoDevicesFromStorage();
+        // Now start P8/P6/P4 tasks (they compete for sMutex; devices already loaded)
+        if (mIoHome != nullptr)
+            mIoHome->StartTasks();
         // Initialize MQTT objects
         InitializeMqtt();
         // Start everything
@@ -386,9 +390,10 @@ namespace IoRts
 
         for (const auto &[deviceID, storedDevice] : storedDevices)
         {
-            // Copy transit_time_ms from storage into the in-memory device
+            // Copy persisted fields from storage into the in-memory device
             iohome::IoDevice dev = storedDevice.device;
             dev.transit_time_ms = storedDevice.transit_time_ms;
+            dev.quiet = storedDevice.quiet;
 
             // Add to our local map regardless of active/inactive state
             mIoDevicesMutex.lock();
@@ -477,7 +482,6 @@ namespace IoRts
 
     bool IoRtsManager::SetTransitTime(const std::string &deviceID, uint32_t transit_time_ms)
     {
-        // Update in-memory device
         mIoDevicesMutex.lock();
         auto it = mIoDevices.find(deviceID);
         bool found = it != mIoDevices.end();
@@ -488,7 +492,6 @@ namespace IoRts
         if (!found)
             return false;
 
-        // Persist to NVS
         Helpers::StoredIoDevice stored;
         if (Helpers::DeviceStorage::LoadIoDevice(deviceID, stored) != ESP_OK)
             return false;
@@ -496,6 +499,28 @@ namespace IoRts
         esp_err_t err = Helpers::DeviceStorage::SaveIoDevice(deviceID, stored);
         if (err == ESP_OK)
             ESP_LOGI(TAG, "Transit time for %s set to %ums", deviceID.c_str(), transit_time_ms);
+        return err == ESP_OK;
+    }
+
+    bool IoRtsManager::SetQuiet(const std::string &deviceID, bool quiet)
+    {
+        mIoDevicesMutex.lock();
+        auto it = mIoDevices.find(deviceID);
+        bool found = it != mIoDevices.end();
+        if (found)
+            it->second.quiet = quiet;
+        mIoDevicesMutex.unlock();
+
+        if (!found)
+            return false;
+
+        Helpers::StoredIoDevice stored;
+        if (Helpers::DeviceStorage::LoadIoDevice(deviceID, stored) != ESP_OK)
+            return false;
+        stored.quiet = quiet;
+        esp_err_t err = Helpers::DeviceStorage::SaveIoDevice(deviceID, stored);
+        if (err == ESP_OK)
+            ESP_LOGI(TAG, "Quiet mode for %s set to %s", deviceID.c_str(), quiet ? "on" : "off");
         return err == ESP_OK;
     }
 
@@ -539,6 +564,12 @@ namespace IoRts
             sMqttHelper->StartMqttClient();
     }
 
+    void IoRtsManager::TriggerMqttRestart()
+    {
+        if (sMqttHelper != nullptr)
+            sMqttHelper->RestartMqttClient();
+    }
+
     void IoRtsManager::InitializeIo()
     {
         mIoPassive = IoHomeConfig::isPassiveModeEnabled();
@@ -576,5 +607,10 @@ namespace IoRts
         {
             sMqttHelper = nullptr;
         }
+    }
+
+    extern "C" bool oled_mqtt_connected(void)
+    {
+        return sMqttHelper != nullptr && sMqttHelper->IsMqttConnected();
     }
 }

@@ -473,11 +473,25 @@ namespace Helpers
                             {
                                 if (command.compare("CLOSE") == 0)
                                 {
-                                    mqttHelper->GetIoRtsManager()->mIoHome->CloseDevice(deviceID);
+                                    bool quiet = false;
+                                    {
+                                        std::lock_guard<std::mutex> guard(mqttHelper->GetIoRtsManager()->mIoDevicesMutex);
+                                        auto it = mqttHelper->GetIoRtsManager()->mIoDevices.find(deviceID);
+                                        if (it != mqttHelper->GetIoRtsManager()->mIoDevices.end())
+                                            quiet = it->second.quiet;
+                                    }
+                                    mqttHelper->GetIoRtsManager()->mIoHome->CloseDevice(deviceID, quiet);
                                 }
                                 else if (command.compare("OPEN") == 0)
                                 {
-                                    mqttHelper->GetIoRtsManager()->mIoHome->OpenDevice(deviceID);
+                                    bool quiet = false;
+                                    {
+                                        std::lock_guard<std::mutex> guard(mqttHelper->GetIoRtsManager()->mIoDevicesMutex);
+                                        auto it = mqttHelper->GetIoRtsManager()->mIoDevices.find(deviceID);
+                                        if (it != mqttHelper->GetIoRtsManager()->mIoDevices.end())
+                                            quiet = it->second.quiet;
+                                    }
+                                    mqttHelper->GetIoRtsManager()->mIoHome->OpenDevice(deviceID, quiet);
                                 }
                                 else if (command.compare("STOP") == 0)
                                 {
@@ -618,17 +632,20 @@ namespace Helpers
             ESP_LOGE(TAG, "Failed to create MQTT client!");
             return ESP_FAIL;
         }
-        // Create one-shot reconnect timer (fires when broker drops but WiFi is still up)
-        esp_timer_create_args_t timer_args = {};
-        timer_args.callback = mqtt_reconnect_timer_cb;
-        timer_args.arg = this;
-        timer_args.name = "mqtt_reconnect";
-        if (esp_timer_create(&timer_args, &mReconnectTimer) != ESP_OK)
+        // Create one-shot reconnect timer only on first start (reused across RestartMqttClient calls)
+        if (mReconnectTimer == nullptr)
         {
-            ESP_LOGE(TAG, "Failed to create MQTT reconnect timer!");
-            esp_mqtt_client_destroy(mMqttClientHandle);
-            mMqttClientHandle = nullptr;
-            return ESP_FAIL;
+            esp_timer_create_args_t timer_args = {};
+            timer_args.callback = mqtt_reconnect_timer_cb;
+            timer_args.arg = this;
+            timer_args.name = "mqtt_reconnect";
+            if (esp_timer_create(&timer_args, &mReconnectTimer) != ESP_OK)
+            {
+                ESP_LOGE(TAG, "Failed to create MQTT reconnect timer!");
+                esp_mqtt_client_destroy(mMqttClientHandle);
+                mMqttClientHandle = nullptr;
+                return ESP_FAIL;
+            }
         }
         // Register event handler
         err = esp_mqtt_client_register_event(mMqttClientHandle, MQTT_EVENT_ANY, mqtt_event_handler, this);
@@ -641,22 +658,24 @@ namespace Helpers
             mMqttClientHandle = nullptr;
             return ESP_FAIL;
         }
-        // Register network event handlers to coordinate MQTT reconnect with WiFi/Ethernet state
+        // Register network event handlers only once — they survive client restarts
+        if (!mNetworkHandlersRegistered)
+        {
 #ifdef CONFIG_CONNECTIVITY_CHOICE_WIFI
-        esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, &mqtt_network_event_handler, this);
-        esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &mqtt_network_event_handler, this);
+            esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, &mqtt_network_event_handler, this);
+            esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &mqtt_network_event_handler, this);
 #endif
 #ifdef CONFIG_CONNECTIVITY_CHOICE_ETH
-        esp_event_handler_register(ETH_EVENT, ETHERNET_EVENT_DISCONNECTED, &mqtt_network_event_handler, this);
-        esp_event_handler_register(IP_EVENT, IP_EVENT_ETH_GOT_IP, &mqtt_network_event_handler, this);
+            esp_event_handler_register(ETH_EVENT, ETHERNET_EVENT_DISCONNECTED, &mqtt_network_event_handler, this);
+            esp_event_handler_register(IP_EVENT, IP_EVENT_ETH_GOT_IP, &mqtt_network_event_handler, this);
 #endif
+            mNetworkHandlersRegistered = true;
+        }
         // Start
         err = esp_mqtt_client_start(mMqttClientHandle);
         if (err != ESP_OK)
         {
             ESP_LOGE(TAG, "Failed to start MQTT client! (%d)", err);
-            esp_timer_delete(mReconnectTimer);
-            mReconnectTimer = nullptr;
             esp_mqtt_client_destroy(mMqttClientHandle);
             mMqttClientHandle = nullptr;
             return ESP_FAIL;
@@ -665,6 +684,28 @@ namespace Helpers
         mMqttState = MqttState::CONNECTING;
         return err;
     }
+
+    esp_err_t MqttHelpers::RestartMqttClient()
+    {
+        if (!MqttConfig::isEnabled())
+            return ESP_ERR_NOT_ALLOWED;
+        if (mStarted && mMqttClientHandle != nullptr)
+        {
+            // Tear down existing client; preserve the reconnect timer for reuse
+            esp_timer_stop(mReconnectTimer);
+            esp_mqtt_client_stop(mMqttClientHandle);
+            esp_mqtt_client_destroy(mMqttClientHandle);
+            mMqttClientHandle = nullptr;
+            mStarted = false;
+            mMqttConnected = false;
+        }
+        mMqttState = MqttState::DISABLED;
+        // Re-read cached topic/discovery prefix so new values take effect immediately
+        mTopicPrefix = MqttConfig::GetTopicPrefix();
+        mDiscoveryPrefix = MqttConfig::GetDiscoveryPrefix();
+        return StartMqttClient();
+    }
+
     void MqttHelpers::SendDiscovery()
     {
         // See https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery

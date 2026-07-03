@@ -9,9 +9,13 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
-#include "freertos/timers.h"
 #include <string.h>
 #include <stdio.h>
+#include <stdbool.h>
+#include "esp_wifi.h"
+#include "esp_netif.h"
+#include "esp_app_desc.h"
+#include <stdlib.h>
 
 static const char *TAG = "oled";
 
@@ -145,6 +149,42 @@ static const uint8_t font6x8[96][OLED_CHAR_W] = {
     {0xFF,0xFF,0xFF,0xFF,0xFF,0x00}, /* 0x7F DEL */
 };
 
+/* ---- Icon bitmaps for TX / RX direction (6 x 8 px, column-oriented, bit 0 = top) ---- */
+
+static const uint8_t icon_tx[OLED_CHAR_W] = {
+    0x20, 0x11, 0x09, 0x05, 0x01, 0x1F
+};
+
+static const uint8_t icon_rx[OLED_CHAR_W] = {
+    0x7C, 0x40, 0x50, 0x48, 0x44, 0x02
+};
+
+/* MQTT connection icons (8x8, column-oriented, bit 0 = top) */
+static const uint8_t icon_mqtt_on[8] = {
+    0x1E, 0x33, 0x21, 0x61, 0xE1, 0xB3, 0x9E, 0x00
+};
+static const uint8_t icon_mqtt_off[8] = {
+    0x46, 0x21, 0x11, 0x09, 0x24, 0x62, 0xA1, 0x98
+};
+
+/* ---- Device line state (combines TX+RX per device) ---- */
+
+#define MAX_DEV_LINES 4
+
+typedef struct {
+    char device_id[7];
+    char tx_cmd[5];
+    char rx_cmd[3];
+    int  rssi;
+    bool has_tx;
+    bool has_rx;
+    bool rx_first;
+    TickType_t last_update;
+} oled_dev_line_t;
+
+/* Row mapping for each device line slot */
+static const uint8_t DEV_LINE_ROWS[MAX_DEV_LINES] = {2, 3, 4, 5};
+
 /* ---- Queue / task types (internal) ---- */
 
 #define OLED_QUEUE_DEPTH 8
@@ -166,9 +206,27 @@ static QueueHandle_t  s_queue;
 static StaticTask_t   s_task_buf;
 static StackType_t    s_task_stack[2048];
 
-static StaticTimer_t  s_timer_buf;
-static TimerHandle_t  s_timer;
-static int            s_last_rssi = 0;
+static oled_dev_line_t s_dev_lines[MAX_DEV_LINES];
+static int s_next_slot = 0;
+
+static TickType_t s_status_time = 0;
+static char s_version_str[16] = "v0.00.00";
+
+static bool s_mqtt_connected = false;
+static int  s_net_state = 0;
+
+/* Condensed header width: logo(12) + gap(4) + "control"(42) + gap(15) + MQTT(8) + gap(5) + network(8) = 94 */
+#define CONDENSED_W 94
+
+/* Screensaver state */
+static bool       s_saver_active   = false;
+static int        s_saver_x        = 0;
+static int        s_saver_y        = 0;
+static TickType_t s_idle_since     = 0;
+static TickType_t s_saver_last_move = 0;
+static char       s_status_msg[22] = "";
+
+extern bool oled_mqtt_connected(void);
 
 /* ---- Low-level I2C helpers (called only from oled_task or init) ---- */
 
@@ -205,50 +263,497 @@ static void oled_print_line(uint8_t row, const char *text)
     send_data(line, OLED_COLS);
 }
 
-/* ---- Timer callback: restore RSSI line after status message ---- */
-
-static void status_clear_cb(TimerHandle_t xTimer)
+static void oled_init_version(void)
 {
-    (void)xTimer;
-    oled_evt_t evt = { .type = OLED_EVT_STATUS, .position_pct = -1, .rssi = 0 };
-    if (s_last_rssi != 0)
-        snprintf(evt.cmd_str, sizeof(evt.cmd_str), "  RSSI:%ddBm", s_last_rssi);
+    const esp_app_desc_t *desc = esp_app_get_description();
+    int major = 0, minor = 0, patch = 0;
+    const char *v = desc->version;
+    if (v[0] == 'v' || v[0] == 'V') v++;
+    sscanf(v, "%d.%d.%d", &major, &minor, &patch);
+    snprintf(s_version_str, sizeof(s_version_str), "v%d.%d.%d", major, minor, patch);
+}
+
+static void oled_render_status_line(const char *msg)
+{
+    if (s_dev == NULL) return;
+
+    uint8_t line[OLED_COLS];
+    memset(line, 0, sizeof(line));
+
+    if (msg && msg[0]) {
+        size_t ver_chars = strlen(s_version_str);
+        size_t max_chars = (OLED_COLS - (int)(ver_chars * OLED_CHAR_W)) / OLED_CHAR_W;
+        size_t len = strlen(msg);
+        if (len > max_chars) len = max_chars;
+        for (size_t i = 0; i < len; i++) {
+            uint8_t c = (uint8_t)msg[i];
+            if (c < 0x20 || c > 0x7F) c = 0x20;
+            memcpy(&line[i * OLED_CHAR_W], font6x8[c - 0x20], OLED_CHAR_W);
+        }
+    }
+
+    size_t ver_len = strlen(s_version_str);
+    int start = OLED_COLS - (int)(ver_len * OLED_CHAR_W);
+    for (size_t i = 0; i < ver_len; i++) {
+        uint8_t c = (uint8_t)s_version_str[i];
+        if (c < 0x20 || c > 0x7F) c = 0x20;
+        memcpy(&line[start + i * OLED_CHAR_W], font6x8[c - 0x20], OLED_CHAR_W);
+    }
+
+    send_cmd(0xB0 | 7);
+    send_cmd(0x00);
+    send_cmd(0x10);
+    send_data(line, OLED_COLS);
+}
+
+/* ---- Draw a solid 1-pixel horizontal line across the full width at a given page and row ---- */
+
+static void oled_draw_hline(uint8_t row, uint8_t pixel_row)
+{
+    if (row >= OLED_PAGES || pixel_row > 7 || s_dev == NULL) return;
+    uint8_t line[OLED_COLS];
+    memset(line, 1 << pixel_row, sizeof(line));
+    send_cmd(0xB0 | row);
+    send_cmd(0x00);
+    send_cmd(0x10);
+    send_data(line, OLED_COLS);
+}
+
+/* ---- RSSI bar graph (3 vertical bars, right-aligned at cols 120-127) ---- */
+
+static const uint8_t RSSI_BARS[4][8] = {
+    {0x80,0x80,0x00,0x80,0x80,0x00,0x80,0x80},
+    {0xE0,0xE0,0x00,0x80,0x80,0x00,0x80,0x80},
+    {0xE0,0xE0,0x00,0xF8,0xF8,0x00,0x80,0x80},
+    {0xE0,0xE0,0x00,0xF8,0xF8,0x00,0xFE,0xFE},
+};
+
+/* ---- Network-status icons (8 x 8 px, column-oriented, bit 0 = top) ---- */
+
+#ifdef CONFIG_CONNECTIVITY_CHOICE_ETH
+/* RJ45 Ethernet connector */
+static const uint8_t icon_lan_on[8] = {
+    0x7F, 0x41, 0x1D, 0x3D, 0x3D, 0x1D, 0x41, 0x7F
+};
+#endif
+
+/* Question-mark glyph for "no connectivity configured" */
+static const uint8_t icon_lan_off[8] = {
+    0x04, 0x22, 0x41, 0x01, 0x08, 0x12, 0x24, 0x00
+};
+
+static void oled_draw_rssi_bars(uint8_t *line, int col, int rssi)
+{
+    int level;
+    if (rssi == 0)                level = 0;
+    else if (rssi >= -65)         level = 3;
+    else if (rssi >= -80)         level = 2;
+    else if (rssi >= -95)         level = 1;
+    else                          level = 0;
+    memcpy(&line[col], RSSI_BARS[level], 8);
+}
+
+/* ---- Header row: IO logo + "control" + right-aligned network icon ---- */
+
+/* Sentinel passed to oled_draw_header to indicate "no credentials configured" */
+#define RSSI_NO_CREDS 127
+
+static const uint8_t s_logo_rows[][2] = {
+    {0xff, 0xf0}, {0x88, 0x10}, {0x88, 0x10}, {0x88, 0x10},
+    {0x88, 0x10}, {0x88, 0x10}, {0x8f, 0xf0}
+};
+
+static void draw_logo(uint8_t *line, int x)
+{
+    for (int col = 0; col < 12; col++) {
+        uint8_t byte = 0;
+        for (int row = 0; row < 7; row++) {
+            uint16_t r = ((uint16_t)s_logo_rows[row][0] << 8) | s_logo_rows[row][1];
+            if (r & (0x8000 >> col)) byte |= (1 << row);
+        }
+        line[x + col] = byte << 1;
+    }
+}
+
+static void oled_draw_header(void)
+{
+    uint8_t line[OLED_COLS];
+    memset(line, 0, sizeof(line));
+    draw_logo(line, 0);
+    int pos = 16;
+    const char *title = "control";
+    for (size_t i = 0; title[i]; i++) {
+        uint8_t c = (uint8_t)title[i];
+        if (c < 0x20 || c > 0x7F) c = 0x20;
+        memcpy(&line[pos + i * OLED_CHAR_W], font6x8[c - 0x20], OLED_CHAR_W);
+    }
+
+    memcpy(&line[107], s_mqtt_connected ? icon_mqtt_on : icon_mqtt_off, 8);
+
+#ifdef CONFIG_CONNECTIVITY_CHOICE_ETH
+    memcpy(&line[OLED_COLS - 8], s_net_state ? icon_lan_on : icon_lan_off, 8);
+#else
+    if (s_net_state == RSSI_NO_CREDS)
+        memcpy(&line[OLED_COLS - 8], icon_lan_off, 8);
     else
-        evt.cmd_str[0] = '\0';
-    xQueueSend(s_queue, &evt, 0);
+        oled_draw_rssi_bars(line, OLED_COLS - 8, s_net_state);
+#endif
+
+    send_cmd(0xB0 | 0);
+    send_cmd(0x00);
+    send_cmd(0x10);
+    send_data(line, OLED_COLS);
+}
+
+/* Forward declaration needed by oled_redraw_all */
+static void oled_render_dev_line(int slot);
+
+/* ---- Condensed header for screensaver: logo + "control" + MQTT + network at x offset ---- */
+
+static void oled_draw_condensed_header(int x, int page)
+{
+    uint8_t line[OLED_COLS];
+    memset(line, 0, sizeof(line));
+    int col = x;
+    draw_logo(line, col);
+    col += 16;
+
+    const char *title = "control";
+    for (size_t i = 0; title[i]; i++) {
+        uint8_t c = (uint8_t)title[i];
+        if (c < 0x20 || c > 0x7F) c = 0x20;
+        memcpy(&line[col + i * OLED_CHAR_W], font6x8[c - 0x20], OLED_CHAR_W);
+    }
+    col += 7 * OLED_CHAR_W + 15;
+
+    memcpy(&line[col], s_mqtt_connected ? icon_mqtt_on : icon_mqtt_off, 8);
+    col += 13;
+
+#ifdef CONFIG_CONNECTIVITY_CHOICE_ETH
+    memcpy(&line[col], s_net_state ? icon_lan_on : icon_lan_off, 8);
+#else
+    if (s_net_state == RSSI_NO_CREDS)
+        memcpy(&line[col], icon_lan_off, 8);
+    else
+        oled_draw_rssi_bars(line, col, s_net_state);
+#endif
+
+    send_cmd(0xB0 | page);
+    send_cmd(0x00);
+    send_cmd(0x10);
+    send_data(line, OLED_COLS);
+}
+
+/* ---- Restore full display after screensaver ---- */
+
+static void oled_redraw_all(void)
+{
+    oled_draw_header();
+    oled_draw_hline(1, 3);
+    oled_draw_hline(6, 3);
+    for (int i = 0; i < MAX_DEV_LINES; i++)
+        oled_render_dev_line(i);
+    oled_render_status_line(s_status_time ? s_status_msg : "");
+}
+
+/* ---- Per-device line helpers ---- */
+
+static int find_or_alloc_line(const char *device_id)
+{
+    if (!device_id) device_id = "";
+    for (int i = 0; i < MAX_DEV_LINES; i++) {
+        if (strcmp(s_dev_lines[i].device_id, device_id) == 0) return i;
+    }
+    for (int i = 0; i < MAX_DEV_LINES; i++) {
+        if (s_dev_lines[i].device_id[0] == '\0') return i;
+    }
+    int slot = s_next_slot;
+    s_next_slot = (s_next_slot + 1) % MAX_DEV_LINES;
+    memset(&s_dev_lines[slot], 0, sizeof(oled_dev_line_t));
+    return slot;
+}
+
+/* Layout per device line (128 px):
+ *  0-35   device name (6 chars)
+ *  36-47  gap
+ *  48-53  first icon (TX or RX, 6 px)
+ *  54-56  gap (3 px)
+ *  57-80  first cmd text (4 or 2 chars)
+ *  81-83  gap (3 px)
+ *  84-89  second icon (RX or TX, 6 px)
+ *  90-92  gap (3 px)
+ *  93-104 second cmd text (2 or 4 chars)
+ *  105-119 gap
+ *  120-127 RSSI signal bars (8 px)
+ *
+ *  TX part always uses 48/57 when first, 84/93 when second.
+ *  RX part always uses 84/93 when first, 48/57 when second.
+ *  Order depends on which event (TX or RX) arrived first for that line.
+ */
+
+static void oled_render_dev_line(int slot)
+{
+    int row = DEV_LINE_ROWS[slot];
+    oled_dev_line_t *dev = &s_dev_lines[slot];
+    uint8_t line[OLED_COLS];
+    memset(line, 0, sizeof(line));
+
+    if (dev->device_id[0]) {
+        for (size_t i = 0; i < 6 && dev->device_id[i]; i++) {
+            uint8_t c = (uint8_t)dev->device_id[i];
+            if (c < 0x20 || c > 0x7F) c = 0x20;
+            memcpy(&line[i * OLED_CHAR_W], font6x8[c - 0x20], OLED_CHAR_W);
+        }
+    }
+
+    int tx_icon, tx_text, rx_icon, rx_text;
+    if (dev->rx_first) {
+        rx_icon = 48;   rx_text = 57;
+        tx_icon = 84;   tx_text = 93;
+    } else {
+        tx_icon = 48;   tx_text = 57;
+        rx_icon = 84;   rx_text = 93;
+    }
+
+    if (dev->has_tx) {
+        memcpy(&line[tx_icon], icon_tx, OLED_CHAR_W);
+        for (size_t i = 0; i < 4 && dev->tx_cmd[i]; i++) {
+            uint8_t c = (uint8_t)dev->tx_cmd[i];
+            if (c < 0x20 || c > 0x7F) c = 0x20;
+            memcpy(&line[tx_text + i * OLED_CHAR_W], font6x8[c - 0x20], OLED_CHAR_W);
+        }
+    }
+
+    if (dev->has_rx) {
+        memcpy(&line[rx_icon], icon_rx, OLED_CHAR_W);
+        for (size_t i = 0; i < 2 && dev->rx_cmd[i]; i++) {
+            uint8_t c = (uint8_t)dev->rx_cmd[i];
+            if (c < 0x20 || c > 0x7F) c = 0x20;
+            memcpy(&line[rx_text + i * OLED_CHAR_W], font6x8[c - 0x20], OLED_CHAR_W);
+        }
+        oled_draw_rssi_bars(line, OLED_COLS - 8, dev->rssi);
+    }
+
+    send_cmd(0xB0 | row);
+    send_cmd(0x00);
+    send_cmd(0x10);
+    send_data(line, OLED_COLS);
+}
+
+/* ---- Event processing (called from oled_task) ---- */
+
+static void process_event(const oled_evt_t *evt)
+{
+    if (s_saver_active) {
+        s_saver_active = false;
+        oled_redraw_all();
+    }
+    s_idle_since = 0;
+
+    switch (evt->type) {
+    case OLED_EVT_TX: {
+        int slot = find_or_alloc_line(evt->device_id);
+        oled_dev_line_t *dev = &s_dev_lines[slot];
+        if (!dev->has_tx && !dev->has_rx) dev->rx_first = false;
+        memcpy(dev->device_id, evt->device_id, sizeof(dev->device_id));
+        const char *cmd = evt->cmd_str;
+        if (cmd[0] == '0' && (cmd[1] == 'x' || cmd[1] == 'X')) cmd += 2;
+        snprintf(dev->tx_cmd, sizeof(dev->tx_cmd), "%.4s", cmd);
+        dev->has_tx = true;
+        dev->last_update = xTaskGetTickCount();
+        oled_render_dev_line(slot);
+        break;
+    }
+    case OLED_EVT_RX: {
+        int slot = find_or_alloc_line(evt->device_id);
+        oled_dev_line_t *dev = &s_dev_lines[slot];
+        if (!dev->has_tx && !dev->has_rx) dev->rx_first = true;
+        memcpy(dev->device_id, evt->device_id, sizeof(dev->device_id));
+        snprintf(dev->rx_cmd, sizeof(dev->rx_cmd), "%.2s", evt->cmd_str);
+        dev->rssi  = evt->rssi;
+        dev->has_rx = true;
+        dev->last_update = xTaskGetTickCount();
+        oled_render_dev_line(slot);
+        break;
+    }
+    case OLED_EVT_STATUS:
+        strncpy(s_status_msg, evt->cmd_str, sizeof(s_status_msg) - 1);
+        s_status_msg[sizeof(s_status_msg) - 1] = '\0';
+        oled_render_status_line(evt->cmd_str);
+        s_status_time = evt->cmd_str[0] ? xTaskGetTickCount() : 0;
+        break;
+    }
+}
+
+/* ---- Stale-content helpers ---- */
+
+static void clear_stale_status(TickType_t now)
+{
+    if (s_status_time && (now - s_status_time) >= pdMS_TO_TICKS(4000)) {
+        s_status_time = 0;
+        oled_render_status_line("");
+    }
+}
+
+static void clear_stale_dev_lines(TickType_t now)
+{
+    TickType_t timeout = pdMS_TO_TICKS(30000);
+    for (int i = 0; i < MAX_DEV_LINES; i++) {
+        if (s_dev_lines[i].device_id[0] &&
+            (now - s_dev_lines[i].last_update) >= timeout)
+            memset(&s_dev_lines[i], 0, sizeof(oled_dev_line_t));
+    }
+}
+
+/* ---- Compact the device-lines array (remove gaps) and re-render ---- */
+
+static void compact_dev_lines(void)
+{
+    int kept = 0;
+    bool changed = false;
+    for (int i = 0; i < MAX_DEV_LINES; i++) {
+        if (s_dev_lines[i].device_id[0]) {
+            if (i != kept) {
+                s_dev_lines[kept] = s_dev_lines[i];
+                memset(&s_dev_lines[i], 0, sizeof(oled_dev_line_t));
+                changed = true;
+            }
+            kept++;
+        }
+    }
+    s_next_slot = (kept < MAX_DEV_LINES) ? kept : 0;
+    if (changed) {
+        for (int i = 0; i < MAX_DEV_LINES; i++)
+            oled_render_dev_line(i);
+    }
+}
+
+/* ---- Screensaver helpers ---- */
+
+static bool has_active_content(void)
+{
+    for (int i = 0; i < MAX_DEV_LINES; i++) {
+        if (s_dev_lines[i].device_id[0]) return true;
+    }
+    return (s_status_time != 0);
+}
+
+static void exit_screensaver(void)
+{
+    s_idle_since = 0;
+    if (s_saver_active) {
+        s_saver_active = false;
+        oled_redraw_all();
+    }
+}
+
+static void activate_screensaver(TickType_t now)
+{
+    s_saver_active = true;
+    s_saver_x = 0;
+    s_saver_y = 0;
+    s_saver_last_move = now;
+    for (int p = 0; p < OLED_PAGES; p++)
+        oled_print_line(p, NULL);
+    oled_draw_condensed_header(s_saver_x, s_saver_y);
+}
+
+static void move_screensaver(TickType_t now)
+{
+    oled_print_line(s_saver_y, NULL);
+    s_saver_last_move = now;
+    int max_x = OLED_COLS - CONDENSED_W;
+    if (max_x > 0)
+        s_saver_x = rand() % (max_x + 1);
+    s_saver_y = rand() % OLED_PAGES;
+    oled_draw_condensed_header(s_saver_x, s_saver_y);
+}
+
+static void update_screensaver(TickType_t now)
+{
+    if (!s_saver_active) {
+        if (s_idle_since == 0) {
+            s_idle_since = now;
+        } else if ((now - s_idle_since) >= pdMS_TO_TICKS(10000)) {
+            activate_screensaver(now);
+        }
+    } else if ((now - s_saver_last_move) >= pdMS_TO_TICKS(10000)) {
+        move_screensaver(now);
+    } else {
+        oled_draw_condensed_header(s_saver_x, s_saver_y);
+    }
+}
+
+/* ---- Periodic 2-second cleanup: stale lines, screensaver ---- */
+
+static void cleanup_oled(TickType_t now)
+{
+    clear_stale_status(now);
+    clear_stale_dev_lines(now);
+    compact_dev_lines();
+
+    if (has_active_content()) {
+        exit_screensaver();
+    } else {
+        update_screensaver(now);
+    }
+}
+
+/* ---- Periodic 10-second network status refresh ---- */
+
+static void update_network(void)
+{
+    s_mqtt_connected = oled_mqtt_connected();
+    bool draw_header = !s_saver_active;
+#ifdef CONFIG_CONNECTIVITY_CHOICE_ETH
+    esp_netif_t *eth = esp_netif_get_handle_from_ifkey("eth");
+    if (eth) {
+        esp_netif_ip_info_t ip;
+        s_net_state = (esp_netif_get_ip_info(eth, &ip) == ESP_OK);
+    } else {
+        s_net_state = 0;
+    }
+    if (draw_header) oled_draw_header();
+#else
+    wifi_ap_record_t ap;
+    int level;
+    if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
+        level = ap.rssi;
+    } else {
+        wifi_config_t cfg;
+        if (esp_wifi_get_config(WIFI_IF_STA, &cfg) == ESP_OK && cfg.sta.ssid[0])
+            level = 0;
+        else
+            level = RSSI_NO_CREDS;
+    }
+    s_net_state = level;
+    if (draw_header) oled_draw_header();
+#endif
 }
 
 /* ---- OLED task: sole owner of I2C after init ---- */
 
 static void oled_task(void *arg)
 {
+    (void)arg;
     oled_evt_t evt;
-    char buf[22];
+    TickType_t last_cleanup = 0;
+    TickType_t last_net_update = 0;
     for (;;) {
-        if (!xQueueReceive(s_queue, &evt, portMAX_DELAY)) continue;
-        switch (evt.type) {
-        case OLED_EVT_TX:
-            snprintf(buf, sizeof(buf), "TX > %.6s", evt.device_id);
-            oled_print_line(2, buf);
-            snprintf(buf, sizeof(buf), "  %.18s", evt.cmd_str);
-            oled_print_line(3, buf);
-            break;
-        case OLED_EVT_RX:
-            s_last_rssi = evt.rssi;
-            snprintf(buf, sizeof(buf), "RX < %.6s", evt.device_id);
-            oled_print_line(5, buf);
-            if (evt.position_pct >= 0)
-                snprintf(buf, sizeof(buf), "  %.2s  POS:%d%%", evt.cmd_str, evt.position_pct);
-            else
-                snprintf(buf, sizeof(buf), "  %.2s", evt.cmd_str);
-            oled_print_line(6, buf);
-            snprintf(buf, sizeof(buf), "  RSSI:%ddBm", evt.rssi);
-            oled_print_line(7, buf);
-            break;
-        case OLED_EVT_STATUS:
-            snprintf(buf, sizeof(buf), "%.21s", evt.cmd_str);
-            oled_print_line(7, buf);
-            break;
+        if (xQueueReceive(s_queue, &evt, pdMS_TO_TICKS(2000))) {
+            process_event(&evt);
+        }
+
+        TickType_t now = xTaskGetTickCount();
+
+        if ((now - last_cleanup) >= pdMS_TO_TICKS(2000)) {
+            last_cleanup = now;
+            cleanup_oled(now);
+        }
+
+        if ((now - last_net_update) >= pdMS_TO_TICKS(10000)) {
+            last_net_update = now;
+            update_network();
         }
     }
 }
@@ -314,22 +819,31 @@ esp_err_t oled_init(void)
         return ret;
     }
 
-    /* Clear display then draw static layout — done before task starts */
+    /* Clear display, device-line state, then draw static layout — done before task starts */
     for (uint8_t p = 0; p < OLED_PAGES; p++)
         oled_print_line(p, NULL);
-    oled_print_line(0, "io-homecontrol");
-    oled_print_line(1, "--------------------");
-    oled_print_line(4, "--------------------");
+    memset(s_dev_lines, 0, sizeof(s_dev_lines));
+    s_next_slot = 0;
+    s_net_state = 0;
+    s_mqtt_connected = false;
+    s_saver_active = false;
+    s_saver_x = 0;
+    s_saver_y = 0;
+    s_idle_since = 0;
+    s_saver_last_move = 0;
+    s_status_msg[0] = '\0';
+    srand((unsigned)xTaskGetTickCount());
+    oled_draw_header();
+    oled_draw_hline(1, 3);
+    oled_draw_hline(6, 3);
+    oled_init_version();
+    oled_render_status_line("");
 
     /* Create queue and task — all I2C access goes through the task from here */
     s_queue = xQueueCreateStatic(OLED_QUEUE_DEPTH, sizeof(oled_evt_t),
                                  s_queue_storage, &s_queue_buf);
     xTaskCreateStatic(oled_task, "oled_task", 2048, NULL,
                       tskIDLE_PRIORITY + 1, s_task_stack, &s_task_buf);
-
-    /* One-shot 4s timer to restore RSSI line after a status message */
-    s_timer = xTimerCreateStatic("oled_clr", pdMS_TO_TICKS(4000),
-                                 pdFALSE, NULL, status_clear_cb, &s_timer_buf);
 
     ESP_LOGI(TAG, "display init OK");
     return ESP_OK;
@@ -357,7 +871,6 @@ void oled_show_status(const char *msg)
     oled_evt_t evt = { .type = OLED_EVT_STATUS, .position_pct = -1, .rssi = 0 };
     snprintf(evt.cmd_str, sizeof(evt.cmd_str), "%.21s", msg ? msg : "");
     xQueueSend(s_queue, &evt, 0);
-    xTimerReset(s_timer, 0);
 }
 
 #endif /* CONFIG_OLED_ENABLED */

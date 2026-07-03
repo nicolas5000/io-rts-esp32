@@ -35,8 +35,9 @@ namespace iohome
         bool is_deleted;                      // true if device has been deleted (will not be created at next boot)
         int64_t last_status_timestamp;        // Timestamp of the last received status, in us (use esp_timer_get_time() to fill and compare to local date&time!)
         int64_t next_status_update_timestamp; // Timestamp of the next planned status update, in us (use esp_timer_get_time() to fill and compare to local date&time!)
-        // Transit time — persisted via StoredIoDevice, copied into IoDevice at load time
+        // Fields persisted via StoredIoDevice, copied into IoDevice at load time
         uint32_t transit_time_ms = 0;         // Time to travel full range in ms (0 = uncalibrated)
+        bool quiet = false;                   // Slower, quieter motor operation
         // Transient movement-tracking fields (not persisted, zero at boot)
         int64_t move_start_us  = 0;           // esp_timer_get_time() when the last position command was sent (0 = no active movement)
         float   move_start_pos = 0.0f;        // Position at the time the command was sent

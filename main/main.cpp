@@ -90,6 +90,10 @@ extern "C" void app_main(void)
     // rollback when provisioning mode is entered (web server never starts).
     esp_ota_mark_app_valid_cancel_rollback();
 
+    // Start serial CLI early so network config commands work in provisioning AP mode
+    // (no IoRtsManager yet — IO commands registered later after normal boot)
+    init_cmdline(nullptr);
+
     // Check WiFi credentials — branch into provisioning AP if missing
 #ifdef CONFIG_CONNECTIVITY_CHOICE_WIFI
     if (!Config::NetworkConfig::HasWifiCredentials())
@@ -98,8 +102,8 @@ extern "C" void app_main(void)
         Helpers::WifiProvision::StartAP();
 #if CONFIG_OLED_ENABLED
         oled_show_status("WiFi:io-rts-setup");
-#endif
         int oled_tick = 0;
+#endif
         while (true) {
             vTaskDelay(pdMS_TO_TICKS(1000));
 #if CONFIG_OLED_ENABLED
@@ -139,8 +143,8 @@ extern "C" void app_main(void)
     web_server_start(&ioRtsManager);
 #endif
 
-    // Initialize commands line tools
-    init_cmdline(&ioRtsManager);
+    // Register IO command handlers now that the manager is ready
+    register_io_cmdline_tools(&ioRtsManager);
 
 #if CONFIG_OLED_ENABLED
     oled_show_status("Ready");

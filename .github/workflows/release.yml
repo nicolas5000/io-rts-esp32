@@ -6,14 +6,11 @@ on:
       - 'v*'
 
 jobs:
-  build-release:
-    name: Build & Release (Heltec)
+  build-heltec:
+    name: Build (Heltec ESP32)
     runs-on: ubuntu-latest
     container:
       image: espressif/idf:v6.0.1
-    permissions:
-      contents: write
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -39,7 +36,121 @@ jobs:
             0xf000   build/partition_table/partition-table.bin \
             0x375000 build/ota_data_initial.bin \
             0x10000  build/io-rts-esp32.bin \
-            0x3b7000 build/web.bin
+            0x390000 build/web.bin
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: heltec-artifacts
+          path: |
+            heltec-${{ github.ref_name }}-full.bin
+            heltec-${{ github.ref_name }}-firmware.bin
+            heltec-${{ github.ref_name }}-web.bin
+
+  build-lilygoT3S3:
+    name: Build (LilyGo T3S3 ESP32-S3)
+    runs-on: ubuntu-latest
+    container:
+      image: espressif/idf:v6.0.1
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build firmware
+        run: |
+          . $IDF_PATH/export.sh
+          idf.py -B build_t3s3 -DIDF_TARGET=esp32s3 -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.lilygo_t3s3" -DAPP_VERSION="${{ github.ref_name }}" build
+
+      - name: Prepare artifacts
+        run: |
+          . $IDF_PATH/export.sh
+          TAG="${{ github.ref_name }}"
+          cp build_t3s3/io-rts-esp32.bin "lilygo-t3s3-${TAG}-firmware.bin"
+          cp build_t3s3/web.bin          "lilygo-t3s3-${TAG}-web.bin"
+          python -m esptool --chip esp32s3 merge-bin \
+            --flash-size 4MB \
+            --output "lilygo-t3s3-${TAG}-full.bin" \
+            --target-offset 0x0 \
+            0x0      build_t3s3/bootloader/bootloader.bin \
+            0xf000   build_t3s3/partition_table/partition-table.bin \
+            0x375000 build_t3s3/ota_data_initial.bin \
+            0x10000  build_t3s3/io-rts-esp32.bin \
+            0x390000 build_t3s3/web.bin
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: lilygo-t3s3-artifacts
+          path: |
+            lilygo-t3s3-${{ github.ref_name }}-full.bin
+            lilygo-t3s3-${{ github.ref_name }}-firmware.bin
+            lilygo-t3s3-${{ github.ref_name }}-web.bin
+
+  build-lilygoLora32:
+    name: Build (LilyGo Lora32 v1.6.1 ESP32)
+    runs-on: ubuntu-latest
+    container:
+      image: espressif/idf:v6.0.1
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build firmware
+        run: |
+          . $IDF_PATH/export.sh
+          idf.py -B build_lora32 -DIDF_TARGET=esp32 -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.lilygo_lora32" -DAPP_VERSION="${{ github.ref_name }}" build
+
+      - name: Prepare artifacts
+        run: |
+          . $IDF_PATH/export.sh
+          TAG="${{ github.ref_name }}"
+          cp build_lora32/io-rts-esp32.bin "lilygo-lora32-${TAG}-firmware.bin"
+          cp build_lora32/web.bin          "lilygo-lora32-${TAG}-web.bin"
+          python -m esptool --chip esp32 merge-bin \
+            --flash-size 4MB \
+            --output "lilygo-lora32-${TAG}-full.bin" \
+            --target-offset 0x0 \
+            0x1000   build_lora32/bootloader/bootloader.bin \
+            0xf000   build_lora32/partition_table/partition-table.bin \
+            0x375000 build_lora32/ota_data_initial.bin \
+            0x10000  build_lora32/io-rts-esp32.bin \
+            0x390000 build_lora32/web.bin
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: lilygo-lora32-artifacts
+          path: |
+            lilygo-lora32-${{ github.ref_name }}-full.bin
+            lilygo-lora32-${{ github.ref_name }}-firmware.bin
+            lilygo-lora32-${{ github.ref_name }}-web.bin
+
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [build-heltec, build-lilygoT3S3, build-lilygoLora32]
+    permissions:
+      contents: write
+    steps:
+      - name: Download Heltec artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: heltec-artifacts
+
+      - name: Download LilyGo T3S3 artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: lilygo-t3s3-artifacts
+
+      - name: Download LilyGo Lora32 artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: lilygo-lora32-artifacts
+
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -50,3 +161,9 @@ jobs:
             heltec-${{ github.ref_name }}-full.bin
             heltec-${{ github.ref_name }}-firmware.bin
             heltec-${{ github.ref_name }}-web.bin
+            lilygo-t3s3-${{ github.ref_name }}-full.bin
+            lilygo-t3s3-${{ github.ref_name }}-firmware.bin
+            lilygo-t3s3-${{ github.ref_name }}-web.bin
+            lilygo-lora32-${{ github.ref_name }}-full.bin
+            lilygo-lora32-${{ github.ref_name }}-firmware.bin
+            lilygo-lora32-${{ github.ref_name }}-web.bin

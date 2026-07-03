@@ -22,6 +22,13 @@
 namespace iohome
 {
 
+  enum class PairResult {
+    PAIRED_FULL,               // full key exchange succeeded (CMD 33 received)
+    PAIRED_SHORTCUT_VERIFIED,  // key exchange skipped, CMD 03 confirmed matching key
+    FAILED_KEY_MISMATCH,       // shortcut tried, CMD 03 failed — device has a different key
+    FAILED_NO_RESPONSE         // no CMD 29 received — device not in range or not in pairing mode
+  };
+
   typedef void (*LoggerCallback)(esp_log_level_t log_level, const char *tag, std::string log); // Callback to receive logs from the IO controller (if verbose)
   typedef void (*UpdatedDeviceCallback)(const std::string deviceID, const IoDevice &device);   // Callback to receive status update of devices
   typedef void (*UnknownSenderCallback)(const std::string &senderID);                          // Callback when a frame from an unregistered sender is received
@@ -54,6 +61,9 @@ namespace iohome
     bool Begin(const std::string &own_node_id,
                const std::string &system_key,
                bool isPassive = false);
+
+    /// @brief Start radio and IO processing tasks (call after LoadIoDevicesFromStorage)
+    void StartTasks();
 
     /// @brief Configure physical layer parameters
     /// @details Configure frequency, modulation, data rate, etc.
@@ -147,7 +157,7 @@ namespace iohome
     void DeleteDevice(const std::string &deviceID);
 
     /// @brief Start device discovery and pair any discovered device
-    bool DiscoverAndPairDevice();
+    PairResult DiscoverAndPairDevice();
 
     /// @brief Listen for a controller (e.g. TaHoma/Connectivity Kit) initiating key sharing
     /// and complete the device-side handshake to receive the system key.

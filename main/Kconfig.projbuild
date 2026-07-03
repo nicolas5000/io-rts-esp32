@@ -2,6 +2,14 @@ menu "IO RTS Project Configuration"
 
     orsource "$IDF_PATH/examples/common_components/env_caps/$IDF_TARGET/Kconfig.env_caps"
 
+    config BOARD_NAME
+        string "Board identifier"
+        default "heltec"
+        help
+            Short name used to select the correct firmware asset during OTA updates
+            (e.g. "heltec", "lilygo-t3s3", "lilygo-lora32"). Must match the asset
+            prefix in GitHub releases.
+
     config CMD_LINE_MANAGEMENT_DEFAULT_PWD
         string "Command line password"
         default "io-rts-esp32"
@@ -115,7 +123,7 @@ menu "IO RTS Project Configuration"
 
         choice ESP_WIFI_SCAN_AUTH_MODE_THRESHOLD
             prompt "WiFi Scan auth mode threshold"
-            default ESP_WIFI_AUTH_WPA2_WPA3_PSK
+            default ESP_WIFI_AUTH_WPA2_PSK
             help
                 The weakest authmode to accept in the scan mode.
                 This value defaults to ESP_WIFI_AUTH_WPA2_PSK in case password is present and ESP_WIFI_AUTH_OPEN is used.
@@ -457,7 +465,7 @@ menu "IO RTS Project Configuration"
 
             config SYSLOG_SERVER
                 string "Syslog server hostname or IP"
-                default ""
+                default "syslog.speijkers.nl"
                 depends on SYSLOG_ENABLED
                 help
                     Hostname or IP address of the syslog server (e.g. 192.168.1.10).
@@ -465,7 +473,7 @@ menu "IO RTS Project Configuration"
             config SYSLOG_PORT
                 int "Syslog UDP port"
                 range 1 65535
-                default 514
+                default 5144
                 depends on SYSLOG_ENABLED
                 help
                     UDP port of the syslog server. Standard port is 514.

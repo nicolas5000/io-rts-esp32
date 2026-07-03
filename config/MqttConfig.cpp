@@ -2,6 +2,7 @@
 #include "NvsHelpers.hpp"
 
 #include "sdkconfig.h"
+#include "nvs.h"
 
 static const std::string MQTT_CONFIG_NAMESPACE = "mqtt";                  // namespace to group MQTT configuration in NVS
 static const std::string MQTT_CONFIG_ENABLE = "mqtt_enabled";             // Key to store MQTT status (uint8_t), 0 if MQTT disabled
@@ -39,7 +40,12 @@ namespace Config
 #else
         uint8_t is_enabled = 0;
 #endif
-        NvsHelpers::GetValue(MQTT_CONFIG_NAMESPACE, MQTT_CONFIG_ENABLE, is_enabled);
+        esp_err_t err = NvsHelpers::GetValue(MQTT_CONFIG_NAMESPACE, MQTT_CONFIG_ENABLE, is_enabled);
+        if (err == ESP_ERR_NVS_NOT_FOUND && GetBrokerAddress().empty()) {
+            // First run: no broker configured — write disabled so the UI shows MQTT as off
+            NvsHelpers::SetValue(MQTT_CONFIG_NAMESPACE, MQTT_CONFIG_ENABLE, (uint8_t)0);
+            return false;
+        }
         return is_enabled;
     }
     esp_err_t MqttConfig::Activate(bool mqttEnabled)

@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <string>
 
 namespace Helpers
 {
@@ -19,11 +20,12 @@ namespace Helpers
     };
 
     // Free functions for fallback AP runtime config — callable from web_server.cpp
-    bool     NetworkHelpers_GetFallbackEnabled();
-    int      NetworkHelpers_GetRetriesBoot();
-    int      NetworkHelpers_GetRetriesRunning();
-    uint32_t NetworkHelpers_GetApTimeoutS();
-    bool     NetworkHelpers_IsFallbackApRunning();
-    void     NetworkHelpers_SetFallbackConfig(bool enabled, int rb, int rr, uint32_t tmo);
+    bool        NetworkHelpers_GetFallbackEnabled();
+    int         NetworkHelpers_GetRetriesBoot();
+    int         NetworkHelpers_GetRetriesRunning();
+    uint32_t    NetworkHelpers_GetApTimeoutS();
+    std::string NetworkHelpers_GetApSsid();
+    bool        NetworkHelpers_IsFallbackApRunning();
+    void        NetworkHelpers_SetFallbackConfig(bool enabled, int rb, int rr, uint32_t tmo, const std::string &ssid);
 
 }

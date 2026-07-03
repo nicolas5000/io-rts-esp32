@@ -131,10 +131,11 @@ namespace Helpers
     static esp_netif_t *sApNetif = nullptr;
 
     // Runtime config loaded from NVS, defaults to Kconfig values
-    static bool     sCfgFallbackEnabled  = CONFIG_WIFI_FALLBACK_AP_ENABLED;
-    static int      sCfgRetriesBoot      = CONFIG_WIFI_FALLBACK_AP_RETRIES_BOOT;
-    static int      sCfgRetriesRunning   = CONFIG_WIFI_FALLBACK_AP_RETRIES_RUNNING;
-    static uint32_t sCfgApTimeoutS       = CONFIG_WIFI_FALLBACK_AP_TIMEOUT_S;
+    static bool        sCfgFallbackEnabled  = CONFIG_WIFI_FALLBACK_AP_ENABLED;
+    static int         sCfgRetriesBoot      = CONFIG_WIFI_FALLBACK_AP_RETRIES_BOOT;
+    static int         sCfgRetriesRunning   = CONFIG_WIFI_FALLBACK_AP_RETRIES_RUNNING;
+    static uint32_t    sCfgApTimeoutS       = CONFIG_WIFI_FALLBACK_AP_TIMEOUT_S;
+    static std::string sCfgApSsid           = "io-rts-setup";
 
     static void load_fallback_config()
     {
@@ -148,6 +149,10 @@ namespace Helpers
         if (nvs_get_i32(h, "retries_run",  &v) == ESP_OK) sCfgRetriesRunning = (int)v;
         uint32_t t = 0;
         if (nvs_get_u32(h, "ap_timeout_s", &t) == ESP_OK) sCfgApTimeoutS = t;
+        char ssid_buf[33] = {};
+        size_t ssid_len = sizeof(ssid_buf);
+        if (nvs_get_str(h, "ap_ssid", ssid_buf, &ssid_len) == ESP_OK && ssid_buf[0])
+            sCfgApSsid = ssid_buf;
         nvs_close(h);
     }
 
@@ -167,8 +172,8 @@ namespace Helpers
         esp_wifi_set_mode(WIFI_MODE_APSTA);
 
         wifi_config_t ap_cfg = {};
-        strncpy((char *)ap_cfg.ap.ssid, "io-rts-setup", sizeof(ap_cfg.ap.ssid));
-        ap_cfg.ap.ssid_len        = strlen("io-rts-setup");
+        strncpy((char *)ap_cfg.ap.ssid, sCfgApSsid.c_str(), sizeof(ap_cfg.ap.ssid) - 1);
+        ap_cfg.ap.ssid_len        = (uint8_t)sCfgApSsid.length();
         ap_cfg.ap.channel         = 1;
         ap_cfg.ap.max_connection  = 4;
         ap_cfg.ap.beacon_interval = 200;
@@ -237,18 +242,20 @@ namespace Helpers
         return remaining > 0 ? remaining : 0;
     }
 
-    // Allow web_server to read/write runtime fallback config (Step 4)
-    bool  NetworkHelpers_GetFallbackEnabled()  { return sCfgFallbackEnabled; }
-    int   NetworkHelpers_GetRetriesBoot()      { return sCfgRetriesBoot; }
-    int   NetworkHelpers_GetRetriesRunning()   { return sCfgRetriesRunning; }
-    uint32_t NetworkHelpers_GetApTimeoutS()    { return sCfgApTimeoutS; }
-    bool  NetworkHelpers_IsFallbackApRunning() { return sFallbackApRunning; }
-    void  NetworkHelpers_SetFallbackConfig(bool enabled, int rb, int rr, uint32_t tmo)
+    // Allow web_server to read/write runtime fallback config
+    bool        NetworkHelpers_GetFallbackEnabled()  { return sCfgFallbackEnabled; }
+    int         NetworkHelpers_GetRetriesBoot()      { return sCfgRetriesBoot; }
+    int         NetworkHelpers_GetRetriesRunning()   { return sCfgRetriesRunning; }
+    uint32_t    NetworkHelpers_GetApTimeoutS()       { return sCfgApTimeoutS; }
+    std::string NetworkHelpers_GetApSsid()           { return sCfgApSsid; }
+    bool        NetworkHelpers_IsFallbackApRunning() { return sFallbackApRunning; }
+    void  NetworkHelpers_SetFallbackConfig(bool enabled, int rb, int rr, uint32_t tmo, const std::string &ssid)
     {
         sCfgFallbackEnabled  = enabled;
         sCfgRetriesBoot      = rb;
         sCfgRetriesRunning   = rr;
         sCfgApTimeoutS       = tmo;
+        if (!ssid.empty()) sCfgApSsid = ssid;
     }
 
     static void reconnect_timer_cb(void *)

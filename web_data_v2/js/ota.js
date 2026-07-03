@@ -138,12 +138,7 @@
             status.textContent = "Saving…";
             status.style.color = "";
 
-            fetch("/api/ota/key", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ key: newKey })
-            })
-            .then(function (r) { return r.json(); })
+            window.MiOpenApi.postJson("/api/ota/key", { key: newKey })
             .then(function (d) {
                 if (d.success) {
                     status.textContent = "Key updated.";
@@ -172,11 +167,8 @@
     function fetchAndDisplayIoKey() {
         var display = document.getElementById("io-key-display");
         if (!display) return;
-        fetch("/api/io/key?" + Date.now(), { cache: "no-store" })
-            .then(function (r) { return r.json(); })
-            .then(function (d) {
-                if (d.key) display.value = d.key;
-            })
+        window.MiOpenApi.requestJson("/api/io/key?" + Date.now())
+            .then(function (d) { if (d.key) display.value = d.key; })
             .catch(function () {});
     }
 
@@ -219,12 +211,7 @@
             status.textContent = "Saving…";
             status.style.color = "";
 
-            fetch("/api/io/key", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ key: newKey })
-            })
-            .then(function (r) { return r.json(); })
+            window.MiOpenApi.postJson("/api/io/key", { key: newKey })
             .then(function (d) {
                 if (d.success) {
                     status.textContent = "Key saved. Reboot to apply.";

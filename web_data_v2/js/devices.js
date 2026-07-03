@@ -237,26 +237,26 @@ if (!nameEl || !metaEl || !body) return;
 var hasPos = (group === "shutter" || group === "venetian" || group === "window" || group === "gate");
 var hasFav = (group === "shutter" || group === "venetian" || group === "window");
 nameEl.textContent = device.name;
-metaEl.textContent = (device.type_name || "Unknown")
+metaEl.textContent = (device.type_name || app.i18nText("popup.type_unknown", "Unknown"))
 + (device.manufacturer ? " · " + device.manufacturer : "")
 + " · " + device.id
-+ (device.inactive ? " · inactive" : "");
++ (device.inactive ? " · " + app.i18nText("popup.device_inactive_text", "inactive") : "");
 body.innerHTML = "";
 var nameInput = document.createElement("input");
 nameInput.type = "text";
 nameInput.className = "s-input";
 nameInput.value = device.name;
 nameInput.style.flex = "1";
-var nameSave = devBtn("Save", "primary");
+var nameSave = devBtn(app.i18nText("button.save", "Save"), "primary");
 nameSave.style.flexShrink = "0";
 nameSave.onclick = function () {
 var val = nameInput.value.trim();
-if (!val) { showToast("Name cannot be empty.", "error"); return; }
+if (!val) { showToast(app.i18nText("popup.rename_empty", "Name cannot be empty."), "error"); return; }
 if (val === device.name) { closeDeviceEditModal(); return; }
 window.MiOpenApi.postJson("/api/action", { deviceId: device.id, action: "rename", value: val })
 .then(function (r) {
-if (!r.success) { showToast(r.message || "Rename failed.", "error"); return; }
-showToast(r.message || "Renamed.", "success");
+if (!r.success) { showToast(r.message || app.i18nText("popup.rename_failed", "Rename failed."), "error"); return; }
+showToast(r.message || app.i18nText("popup.renamed", "Renamed."), "success");
 device.name = val;
 nameEl.textContent = val;
 fetchAndDisplayDevices(app);
@@ -273,7 +273,7 @@ if (device.inactive) {
 var badge = document.createElement("span");
 badge.className = "dev-status-badge";
 badge.textContent = app.i18nText("badge.inactive", "Inactive");
-body.appendChild(devRow("Status", null, badge));
+body.appendChild(devRow(app.i18nText("popup.device_status", "Status"), null, badge));
 var reactivateBtn = devBtn(app.i18nText("button.reactivate", "Re-activate"), "primary");
 reactivateBtn.onclick = function () {
 window.MiOpenApi.postJson("/api/action", { deviceId: device.id, action: "reactivateDevice" })
@@ -285,7 +285,7 @@ fetchAndDisplayDevices(app);
 })
 .catch(function (e) { showToast(e.message, "error"); });
 };
-body.appendChild(devRow(app.i18nText("button.reactivate", "Re-activate"), "Restore controls and position tracking.", reactivateBtn));
+body.appendChild(devRow(app.i18nText("button.reactivate", "Re-activate"), app.i18nText("popup.reactivate_desc", "Restore controls and position tracking."), reactivateBtn));
 } else {
 if (hasPos) {
 var posSpan = document.createElement("span");
@@ -293,7 +293,7 @@ posSpan.style.cssText = "font-size:13px;color:var(--text2);font-family:var(--mon
 posSpan.textContent = device.position >= 0
 ? device.position + "% — " + posStateLabel(device.position)
 : posStateLabel(-1);
-body.appendChild(devRow("Position", null, posSpan));
+body.appendChild(devRow(app.i18nText("popup.device_position", "Position"), null, posSpan));
 }
 if (hasFav) {
 var invertToggle = document.createElement("div");
@@ -310,15 +310,34 @@ showToast(app.i18nText("popup.inverted", "Direction inverted."), "success");
 };
 body.appendChild(devRow(
 app.i18nText("label.invert_openclose", "Invert open/close"),
-"Swap which end counts as fully open.",
+app.i18nText("popup.invert_desc", "Swap which end counts as fully open."),
 invertToggle
+));
+}
+if (hasPos) {
+var quietToggle = document.createElement("div");
+quietToggle.className = "s-toggle" + (device.is_quiet ? " on" : "");
+quietToggle.onclick = function () {
+var newVal = !device.is_quiet;
+window.MiOpenApi.postJson("/api/action", { deviceId: device.id, action: "setQuiet", value: newVal })
+.then(function (r) {
+if (!r.success) { showToast(r.message || "Quiet mode failed.", "error"); return; }
+device.is_quiet = newVal;
+quietToggle.classList.toggle("on", device.is_quiet);
+})
+.catch(function (e) { showToast(e.message, "error"); });
+};
+body.appendChild(devRow(
+app.i18nText("label.quiet_mode", "Quiet mode"),
+app.i18nText("popup.quiet_desc", "Slower, quieter motor operation."),
+quietToggle
 ));
 }
 if (hasFav) {
 var favPos = getFavPos(device.id);
 var favSub = favPos !== null ? "Currently: " + favPos + "%" : "No favorite set.";
 var favSetBtn = devBtn(
-device.position >= 0 ? "Set to " + device.position + "%" : "Position unknown",
+device.position >= 0 ? t("popup.fav_set_to", {pos: device.position}) : app.i18nText("popup.fav_unknown", "Position unknown"),
 ""
 );
 if (device.position < 0) favSetBtn.disabled = true;
@@ -327,9 +346,9 @@ favSetBtn.onclick = function () {
 setFavPos(device.id, device.position);
 updateFavButton(device.id);
 var sub = favRow.querySelector(".dev-row-sub");
-if (sub) sub.textContent = "Currently: " + device.position + "%";
-favSetBtn.textContent = "Set to " + device.position + "%";
-showToast("Favorite set to " + device.position + "%.", "success");
+if (sub) sub.textContent = t("popup.fav_currently", {pos: device.position});
+favSetBtn.textContent = t("popup.fav_set_to", {pos: device.position});
+showToast(t("popup.fav_saved", {pos: device.position}), "success");
 };
 body.appendChild(favRow);
 }
@@ -339,18 +358,18 @@ window.MiOpenApi.postJson("/api/action", { deviceId: device.id, action: "identif
 .then(function () { showToast(app.i18nText("popup.identifying", "Identify sent — watch for a brief movement."), "info"); })
 .catch(function (e) { showToast(e.message, "error"); });
 };
-body.appendChild(devRow("Identify", "Triggers a brief movement to locate the device.", idBtn));
+body.appendChild(devRow(app.i18nText("button.identify", "Identify"), app.i18nText("popup.device_identify_desc", "Triggers a brief movement to locate the device."), idBtn));
 }
 var danger = document.createElement("div");
 danger.className = "dev-danger-zone";
 var dangerLbl = document.createElement("div");
 dangerLbl.className = "dev-danger-label";
-dangerLbl.textContent = "Danger zone";
+dangerLbl.textContent = app.i18nText("popup.device_danger_zone", "Danger zone");
 danger.appendChild(dangerLbl);
 if (!device.inactive) {
 var deactivateBtn = devBtn(app.i18nText("button.deactivate", "Deactivate"), "danger");
 deactivateBtn.onclick = function () {
-if (!confirm("Deactivate \"" + device.name + "\"?\n"
+if (!confirm(app.i18nText("confirm.deactivate_device", "Deactivate \"{name}\"?").replace("{name}", device.name) + "\n"
 + app.i18nText("popup.deactivate_warning", "The device will be kept as inactive and can be re-activated later."))) return;
 window.MiOpenApi.postJson("/api/action", { deviceId: device.id, action: "deactivateDevice" })
 .then(function (r) {
@@ -363,13 +382,13 @@ fetchAndDisplayDevices(app);
 };
 danger.appendChild(devRow(
 app.i18nText("button.deactivate", "Deactivate"),
-"Keeps device in list but removes controls. Reversible.",
+app.i18nText("popup.deactivate_desc", "Keeps device in list but removes controls. Reversible."),
 deactivateBtn
 ));
 }
 var deleteBtn = devBtn(app.i18nText("button.delete", "Delete permanently"), "danger");
 deleteBtn.onclick = function () {
-if (!confirm("Permanently delete \"" + device.name + "\"?\n"
+if (!confirm(app.i18nText("confirm.delete_device", "Permanently delete \"{name}\"?").replace("{name}", device.name) + "\n"
 + app.i18nText("popup.delete_warning", "Permanent removal. Cannot be undone — requires factory reset to re-pair."))) return;
 var doDelete = function () {
 window.MiOpenApi.postJson("/api/action", { deviceId: device.id, action: "deleteDevice" })
@@ -390,7 +409,7 @@ doDelete();
 }
 };
 danger.appendChild(devRow(
-"Delete permanently",
+app.i18nText("popup.device_delete_label", "Delete permanently"),
 app.i18nText("popup.delete_warning", "Cannot be undone. Requires factory reset to re-pair."),
 deleteBtn
 ));
@@ -405,7 +424,7 @@ const list = app.elements.deviceList;
 if (!list.hasChildNodes()) {
 var loadingLi = document.createElement("li");
 loadingLi.id = "device-loading";
-loadingLi.textContent = "Loading…";
+loadingLi.textContent = app.i18nText("popup.loading", "Loading…");
 loadingLi.style.cssText = "padding:20px;color:var(--text3);text-align:center;grid-column:1/-1;";
 list.appendChild(loadingLi);
 }
@@ -414,9 +433,9 @@ const devices = await window.MiOpenApi.requestJson("/api/devices");
 app.state.devicesCache = devices;
 list.textContent = "";
 if (!devices.length) {
-app.logStatus("No devices found.", "info");
+app.logStatus(app.i18nText("list.no_devices_found", "No devices found."), "info");
 var empty = document.createElement("li");
-empty.textContent = "No devices available.";
+empty.textContent = app.i18nText("list.no_devices_available", "No devices available.");
 empty.style.cssText = "padding:20px;color:var(--text3);text-align:center;grid-column:1/-1;";
 list.appendChild(empty);
 return;
@@ -560,10 +579,14 @@ makeBtn(_app.i18nText("button.skip","Done"), "", cancel)
 ]);
 fetchAndDisplayDevices(_app);
 }
-function onPairFailed() {
+function onPairFailed(data) {
 if (!_wizard || !_wizard.classList.contains("open")) return;
 _scanning = false; hideBadge();
+if (data && data.status === "key_mismatch") {
+setStatus('<span style="color:#c0392b">' + (data.message || _app.i18nText("popup.pair_key_mismatch","Device found but has a different system key. Factory reset the device and try again.")) + '</span>');
+} else {
 setStatus(_app.i18nText("popup.pair_timeout","No device found."));
+}
 showRetry();
 }
 function startCapture(deviceId) {
@@ -594,6 +617,21 @@ setButtons([makeBtn(_app.i18nText("button.retry","Retry"), "pair", function () {
 }
 return { open:open, cancel:cancel, onDeviceAdded:onDeviceAdded, onPairFailed:onPairFailed, onPairingActive:onPairingActive, onRemoteSeen:onRemoteSeen, onCaptureTimeout:onCaptureTimeout };
 })();
+function openSomfyImportModal(app,dvs){
+var m=document.createElement("div");
+m.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:1000;display:flex;align-items:center;justify-content:center;";
+var h='<div style="background:var(--card);border-radius:12px;padding:20px;width:min(400px,92vw);max-height:80vh;overflow-y:auto;display:flex;flex-direction:column;gap:10px;"><div style="font-weight:600;font-size:15px;">Devices found in Somfy cloud ('+dvs.length+')</div>';
+dvs.forEach(function(d){h+='<label style="display:flex;align-items:center;gap:10px;cursor:'+(d.already_added?'default':'pointer')+';opacity:'+(d.already_added?'.45':'1')+';"><input type="checkbox"'+(d.already_added?' disabled':'')+" data-p='"+JSON.stringify({id:d.id,name:d.name})+"'><span style=\"font-size:13px;\">"+d.name+" · "+d.id+(d.already_added?" (already added)":"")+"</span></label>";});
+h+='<div style="display:flex;gap:8px;margin-top:6px;"><button class="s-btn primary" id="_sa">Add selected</button><button class="s-btn" id="_sc">Cancel</button></div></div>';
+m.innerHTML=h;document.body.appendChild(m);
+m.querySelector("#_sc").onclick=function(){document.body.removeChild(m);};
+m.querySelector("#_sa").addEventListener("click",async function(){
+var ab=this,sel=[].filter.call(m.querySelectorAll("input[data-p]"),function(c){return c.checked&&!c.disabled;}).map(function(c){return JSON.parse(c.dataset.p);});
+if(!sel.length)return;ab.disabled=true;ab.textContent="Adding…";
+try{var r=await window.MiOpenApi.postJson("/api/somfy/add",sel);document.body.removeChild(m);app.logStatus(r.message||"Devices added.",r.success?"info":"error");if(r.success)app.fetchAndDisplayDevices();}
+catch(e){ab.disabled=false;ab.textContent="Add selected";app.logStatus("Error adding devices.","error");}
+});
+}
 function init(app) {
 app.fetchAndDisplayDevices = function () { return fetchAndDisplayDevices(app); };
 app.updateDeviceFill  = updateDeviceFill;
@@ -601,6 +639,16 @@ app.updateDeviceState = updateDeviceState;
 app.pairingWizard     = pairingWizard;
 var pairBtn = document.getElementById("pair-device-btn");
 if (pairBtn) pairBtn.addEventListener("click", function () { pairingWizard.open(app); });
+var _si=document.getElementById("somfy-import-btn");
+if(_si)_si.addEventListener("click",async function(){
+var s=document.getElementById("somfy-status");
+if(s)s.textContent="Contacting Somfy cloud…";_si.disabled=true;
+try{var d=await window.MiOpenApi.postJson("/api/somfy/import",{});_si.disabled=false;
+if(!Array.isArray(d)){if(s)s.textContent=d&&d.message?d.message:"Import failed.";return;}
+if(!d.length){if(s)s.textContent="No io-homecontrol devices found in Somfy account.";return;}
+if(s)s.textContent="";openSomfyImportModal(app,d);
+}catch(e){_si.disabled=false;if(s)s.textContent="Could not reach Somfy cloud.";}
+});
 }
 window.MiOpenDevices = { init: init };
 })();

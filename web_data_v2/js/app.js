@@ -2,10 +2,6 @@
     function createElements() {
         return {
             deviceList:           document.getElementById("device-list"),
-            devicesFileInput:     document.getElementById("devices-file"),
-            devicesUploadButton:  document.getElementById("upload-devices"),
-            downloadDevicesButton:document.getElementById("download-devices"),
-            downloadRemotesButton:document.getElementById("download-remotes"),
             helpDeviceButton:     document.getElementById("help-device"),
             helpRemoteButton:     document.getElementById("help-remote"),
             logFilter:            document.getElementById("select-log"),
@@ -18,8 +14,6 @@
             mqttUpdateButton:     document.getElementById("mqtt-update"),
             mqttUserInput:        document.getElementById("mqtt-user"),
             remotePopupButton:    document.getElementById("remote-popup"),
-            remotesFileInput:     document.getElementById("remotes-file"),
-            remotesUploadButton:  document.getElementById("upload-remotes"),
             statusMessages:       document.getElementById("status-messages"),
             syslogEnabledInput:   document.getElementById("syslog-enabled"),
             syslogServerInput:    document.getElementById("syslog-server"),
@@ -167,7 +161,7 @@
                 } else if (data.type === "pairing_active") {
                     if (app.pairingWizard) app.pairingWizard.onPairingActive(data.remaining_s || 0);
                 } else if (data.type === "pair_failed") {
-                    if (app.pairingWizard) app.pairingWizard.onPairFailed();
+                    if (app.pairingWizard) app.pairingWizard.onPairFailed(data);
                 } else if (data.type === "remote_seen") {
                     if (app.pairingWizard) app.pairingWizard.onRemoteSeen(data.id);
                     if (window.MiOpenRemotes) window.MiOpenRemotes.onRemoteSeen(data.id);
@@ -212,12 +206,12 @@
         ws.onopen = function () {
             reconnectDelay = 1000;
             ws.send('{"type":"hello"}');
-            app.logStatus("WebSocket connected", "info");
+            app.logStatus(t("log.websocket_connected"), "info");
             var dot = document.getElementById("conn-dot");
             if (dot) { dot.classList.remove("offline"); }
         };
         ws.onclose = function () {
-            app.logStatus("WebSocket disconnected — reconnecting in " + (reconnectDelay / 1000) + "s", "error");
+            app.logStatus(t("log.websocket_disconnected_reconnect", { delay: reconnectDelay / 1000 }), "error");
             var dot = document.getElementById("conn-dot");
             if (dot) dot.classList.add("offline");
             setTimeout(connect, reconnectDelay);
@@ -232,24 +226,20 @@
         if (app.elements.mqttUpdateButton) {
             app.elements.mqttUpdateButton.addEventListener("click", app.updateMqttConfig);
         }
-        if (app.elements.devicesUploadButton) {
-            app.elements.devicesUploadButton.addEventListener("click", app.uploadDevices);
-        }
-        if (app.elements.remotesUploadButton) {
-            app.elements.remotesUploadButton.addEventListener("click", app.uploadRemotes);
-        }
-        if (app.elements.downloadDevicesButton) {
-            app.elements.downloadDevicesButton.addEventListener("click", function () {
-                window.MiOpenApi.downloadFile("/api/download/devices", "devices.json").catch(function (e) { app.logStatus("Error downloading: " + e.message, true); });
-            });
-        }
-        if (app.elements.downloadRemotesButton) {
-            app.elements.downloadRemotesButton.addEventListener("click", function () {
-                window.MiOpenApi.downloadFile("/api/download/remotes", "RemoteMap.json").catch(function (e) { app.logStatus("Error downloading: " + e.message, true); });
-            });
-        }
         if (app.elements.remotePopupButton) {
             app.elements.remotePopupButton.addEventListener("click", app.openAddRemotePopup);
+        }
+        var remotesSection = document.getElementById("remotes-section");
+        var remotesSectionHdr = document.getElementById("remotes-section-hdr");
+        if (remotesSection && remotesSectionHdr) {
+            if (localStorage.getItem("remotes-section-open") === "1") {
+                remotesSection.classList.add("open");
+            }
+            remotesSectionHdr.addEventListener("click", function (e) {
+                if (e.target.closest("#remote-popup")) return;
+                var isOpen = remotesSection.classList.toggle("open");
+                localStorage.setItem("remotes-section-open", isOpen ? "1" : "0");
+            });
         }
         if (app.elements.syslogUpdateButton) {
             app.elements.syslogUpdateButton.addEventListener("click", app.updateSyslogConfig);
@@ -275,6 +265,7 @@
         window.MiOpenSettings.init(app);
         window.MiOpenSyslog.init(app);
         window.MiOpenOta.init(app);
+        window.MiOpenBackup.init(app);
         window.MiOpenApp = app;
 
         initLogFilter(app);
@@ -298,12 +289,28 @@
         window.addEventListener("i18n:changed", function () {
             app.fetchAndDisplayDevices();
             app.fetchAndDisplayRemotes();
+            // Refresh dynamic settings strings that are set from JS
+            if (window.MiOpenSettings && window.MiOpenSettings.refreshDynamicLabels) {
+                window.MiOpenSettings.refreshDynamicLabels();
+            }
         });
 
         fetch("/api/ota/key?" + Date.now(), { cache: "no-store" })
             .then(function (r) { return r.json(); })
-            .then(function (d) { if (d.key) window.MiOpenApi.otaKey = d.key; })
-            .catch(function () {});
+            .then(function (d) {
+                if (d.key) {
+                    window.MiOpenApi.otaKey = d.key;
+                    if (window.MiOpenSettings && window.MiOpenSettings.refreshIoKey) window.MiOpenSettings.refreshIoKey();
+                }
+            })
+            .catch(function () {})
+            .finally(function () {
+                app.loadMqttConfig();
+                app.loadSyslogConfig();
+                app.fetchAndDisplayDevices().then(function () {
+                    app.fetchAndDisplayRemotes();
+                });
+            });
 
         fetch("/api/info?" + Date.now(), { cache: "no-store" })
             .then(function (r) { return r.json(); })
@@ -312,16 +319,30 @@
                 if (el) el.textContent = d.version + " · " + d.compile_date;
                 var wel = document.getElementById("web-version");
                 if (wel) wel.textContent = d.web_version || "unknown";
-                if (window.MiOpenUpdater) window.MiOpenUpdater.init(d.version);
+                if (window.MiOpenUpdater) window.MiOpenUpdater.init(d.version, d.board || "heltec");
+                var checkBtn = document.getElementById("check-updates-btn");
+                if (checkBtn && window.MiOpenUpdater) {
+                    checkBtn.addEventListener("click", function () {
+                        checkBtn.disabled = true;
+                        checkBtn.textContent = "…";
+                        localStorage.removeItem("updateDismissed");
+                        Promise.resolve(window.MiOpenUpdater.check(d.version, d.board || "heltec"))
+                            .then(function (found) {
+                                checkBtn.disabled = false;
+                                checkBtn.textContent = t("button.check", "Check");
+                                if (!found) showToast(t("toast.already-up-to-date"), "success");
+                            })
+                            .catch(function () {
+                                checkBtn.disabled = false;
+                                checkBtn.textContent = t("button.check", "Check");
+                                showToast(t("toast.update-server-unreachable"), "error");
+                            });
+                    });
+                }
             })
             .catch(function () {});
 
-        app.logStatus("System started", "info");
-        app.logStatus("Loading devices…", "debug");
-        app.loadMqttConfig();
-        app.loadSyslogConfig();
-        app.fetchAndDisplayDevices().then(function () {
-            app.fetchAndDisplayRemotes();
-        });
+        app.logStatus(t("log.system_started"), "info");
+        app.logStatus(t("log.loading_devices"), "debug");
     });
 })();

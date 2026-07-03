@@ -93,8 +93,7 @@ AGENTS.md
 .claude/
 CLAUDE.md
 CLAUDE_*.md
-docs/pairing_sequence_reference.md
-docs/superpowers/
+docs/
 web-portalcontext.md
 
 # Tools
@@ -102,6 +101,7 @@ tools/console_probe.py
 
 # Local implementation prompts (kept out of repo)
 *-prompt.md
+prompts/
 node_modules
 package-lock.json
 web_data_v2/version.json

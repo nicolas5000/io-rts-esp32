@@ -8,11 +8,11 @@
         var el = g("mqtt-conn-status");
         if (!el) return;
         var map = {
-            connected:    { text: "● Connected",   color: "#27ae60" },
-            connecting:   { text: "◌ Connecting…", color: "#e67e22" },
-            disconnected: { text: "○ Disconnected", color: "#888" },
-            error:        { text: "✕ Error",        color: "#e74c3c" },
-            disabled:     { text: "○ Disabled",    color: "#888" },
+            connected:    { text: t("status.mqtt.connected"),    color: "#27ae60" },
+            connecting:   { text: t("status.mqtt.connecting"),   color: "#e67e22" },
+            disconnected: { text: t("status.mqtt.disconnected"), color: "#888" },
+            error:        { text: t("status.mqtt.error"),        color: "#e74c3c" },
+            disabled:     { text: t("status.mqtt.disabled"),     color: "#888" },
         };
         var s = map[status] || { text: "○ " + status, color: "#888" };
         el.textContent = s.text;
@@ -36,6 +36,7 @@
             app.elements.fallbackRetriesBoot.value    = cfg.retries_boot    ?? 3;
             app.elements.fallbackRetriesRunning.value = cfg.retries_running ?? 3;
             app.elements.fallbackTimeout.value        = cfg.ap_timeout_s    ?? 600;
+            app.elements.fallbackApSsid.value         = cfg.ap_ssid         ?? "";
             updateFallbackStatus(app, cfg);
         } catch (e) {
             console.error("Error fetching fallback config", e);
@@ -46,13 +47,13 @@
         const el = app.elements.fallbackStatus;
         if (!el) return;
         if (cfg.ap_running) {
-            el.textContent = "⚠ Fallback AP active";
+            el.textContent = t("status.wifi.ap-active");
             el.style.color = "#e67e22";
         } else if (cfg.connected) {
-            el.textContent = "● Connected";
+            el.textContent = t("status.wifi.connected");
             el.style.color = "#27ae60";
         } else {
-            el.textContent = "○ Not connected";
+            el.textContent = t("status.wifi.not-connected");
             el.style.color = "#888";
         }
     }
@@ -67,17 +68,45 @@
     }
 
     async function saveFallbackConfig(app) {
+        var statusEl = g("fallback-save-status");
+        // Validate and optionally save password first
+        var pwdNew     = app.elements.fallbackApPasswordNew.value;
+        var pwdConfirm = app.elements.fallbackApPasswordConfirm.value;
+        if (pwdNew || pwdConfirm) {
+            if (pwdNew !== pwdConfirm) {
+                if (statusEl) { statusEl.textContent = t("toast.passwords-no-match"); statusEl.style.color = "var(--red)"; }
+                return;
+            }
+            if (pwdNew && pwdNew.length < 8) {
+                if (statusEl) { statusEl.textContent = t("toast.password-too-short"); statusEl.style.color = "var(--red)"; }
+                return;
+            }
+            try {
+                const pr = await window.MiOpenApi.postJson("/api/misc/password", { password: pwdNew });
+                if (!pr.success && !pr.ok) {
+                    if (statusEl) { statusEl.textContent = pr.message || t("toast.save-failed"); statusEl.style.color = "var(--red)"; }
+                    return;
+                }
+                app.elements.fallbackApPasswordNew.value = "";
+                app.elements.fallbackApPasswordConfirm.value = "";
+            } catch (e) {
+                if (statusEl) { statusEl.textContent = t("toast.error-saving-password"); statusEl.style.color = "var(--red)"; }
+                return;
+            }
+        }
         try {
             const r = await window.MiOpenApi.postJson("/api/wifi/fallback", {
                 enabled:          app.elements.fallbackEnabled.checked,
                 retries_boot:     parseInt(app.elements.fallbackRetriesBoot.value)    || 3,
                 retries_running:  parseInt(app.elements.fallbackRetriesRunning.value) || 3,
-                ap_timeout_s:     parseInt(app.elements.fallbackTimeout.value)        || 600
+                ap_timeout_s:     parseInt(app.elements.fallbackTimeout.value)        || 600,
+                ap_ssid:          app.elements.fallbackApSsid.value.trim() || "io-rts-setup"
             });
-            if (!r.success && !r.ok) { showToast(r.message || "Save failed.", "error"); return; }
-            showToast("Fallback AP settings saved.", "success");
+            if (!r.success && !r.ok) { showToast(r.message || t("toast.save-failed"), "error"); return; }
+            if (statusEl) { statusEl.textContent = ""; }
+            showToast(t("toast.fallback-saved"), "success");
         } catch (e) {
-            showToast("Error saving fallback config.", "error");
+            showToast(t("toast.error-saving-fallback"), "error");
         }
     }
 
@@ -96,12 +125,11 @@
         const statusEl = app.elements.wifiStatus;
 
         if (!ssid) {
-            showToast("SSID cannot be empty.", "error");
+            showToast(t("toast.ssid-empty"), "error");
             return;
         }
 
-        const msg = "The device will restart and connect to '" + ssid + "'. "
-            + "If credentials are wrong the fallback AP (io-rts-setup) will appear after a short delay.";
+        const msg = t("confirm.wifi-change", { ssid: ssid });
         if (!confirm(msg)) return;
 
         if (statusEl) statusEl.textContent = "";
@@ -112,12 +140,11 @@
         try {
             const wr = await window.MiOpenApi.postJson("/api/wifi/config", payload);
             if (wr.status === "restarting") {
-                // success — fall through to reconnect poll
             } else if (!wr.success) {
                 showToast(wr.message || "WiFi save failed.", "error");
                 return;
             }
-            showToast("WiFi saved — restarting…", "info", 8000);
+            showToast(t("toast.wifi-saved-restarting"), "info", 8000);
             const poll = setInterval(async function () {
                 try {
                     const r = await window.MiOpenApi.requestJson("/api/ota/key");
@@ -125,7 +152,7 @@
                 } catch (e) {  }
             }, 3000);
         } catch (e) {
-            showToast("Error saving WiFi: " + (e.message || e), "error");
+            showToast(t("toast.error-saving-wifi", { message: e.message || e }), "error");
         }
     }
 
@@ -153,32 +180,31 @@
         try {
             const r = await window.MiOpenApi.postJson("/api/mqtt", {
                 enabled:   enabled,
-                user:      app.elements.mqttUserInput.value,
-                server:    app.elements.mqttServerInput.value,
+                user:      app.elements.mqttUserInput.value.trim(),
+                server:    app.elements.mqttServerInput.value.trim(),
                 password:  app.elements.mqttPasswordInput.value,
                 port:      app.elements.mqttPortInput.value,
-                client_id: app.elements.mqttClientIdInput.value,
-                topic:     app.elements.mqttTopicInput.value,
-                discovery: app.elements.mqttDiscoveryInput.value
+                client_id: app.elements.mqttClientIdInput.value.trim(),
+                topic:     app.elements.mqttTopicInput.value.trim(),
+                discovery: app.elements.mqttDiscoveryInput.value.trim()
             });
-            if (!r.success) { showToast(r.message || "MQTT save failed.", "error"); return; }
+            if (!r.success) { showToast(r.message || t("toast.save-failed"), "error"); return; }
             if (fromToggle) {
-                if (!enabled) showToast("MQTT disabled. Reboot to fully disconnect.", "info");
+                if (!enabled) showToast(t("toast.mqtt-disabled"), "info");
             } else {
-                showToast(enabled ? "MQTT settings saved." : "MQTT settings saved. Reboot to fully disconnect.", "success");
+                showToast(enabled ? t("toast.mqtt-saved") : t("toast.mqtt-saved-reboot"), "success");
             }
-            // After enabling, check whether the client actually started or reboot is needed
             setTimeout(async function () {
                 try {
                     var cfg = await window.MiOpenApi.requestJson("/api/mqtt");
                     updateMqttStatusEl(cfg.status || "disconnected");
                     if (enabled && cfg.status === "disabled") {
-                        showToast("Reboot required to connect.", "info");
+                        showToast(t("toast.reboot-required"), "info");
                     }
                 } catch (e) { }
             }, 1500);
         } catch (error) {
-            showToast("Error saving MQTT config.", "error");
+            showToast(t("toast.error-saving-mqtt"), "error");
         }
     }
 
@@ -195,7 +221,14 @@
         }
     }
 
-    // ── Network Config (hostname / DHCP / static IP) ─────────────────────────
+    function setNetworkStaticDisabled(app, disabled) {
+        app.elements.netStaticFields.style.opacity       = disabled ? "0.45" : "1";
+        app.elements.netStaticFields.style.pointerEvents = disabled ? "none"  : "";
+        [app.elements.netIp, app.elements.netMask, app.elements.netGateway,
+         app.elements.netDns1, app.elements.netSntp].forEach(function (el) {
+            el.disabled = disabled;
+        });
+    }
 
     async function loadNetworkConfig(app) {
         try {
@@ -204,13 +237,28 @@
             var isDhcp = r.dhcp !== false;
             app.elements.netDhcp.checked = isDhcp;
             app.elements.netDhcpToggle.classList.toggle("on", isDhcp);
-            app.elements.netStaticFields.style.display = isDhcp ? "none" : "flex";
-            app.elements.netIp.value      = r.ip      || "";
-            app.elements.netMask.value    = r.mask    || "";
-            app.elements.netGateway.value = r.gateway || "";
-            app.elements.netDns1.value    = r.dns1    || "";
-            app.elements.netSntp.value    = r.sntp    || "";
-        } catch (e) { showToast("Failed to load network config.", "error"); }
+            setNetworkStaticDisabled(app, isDhcp);
+            // Store actual DHCP-assigned values so the toggle can pre-fill them
+            app.dhcpActual = {
+                ip:      r.actual_ip      || "0.0.0.0",
+                mask:    r.actual_mask    || "0.0.0.0",
+                gateway: r.actual_gateway || "0.0.0.0",
+                dns1:    r.actual_dns1    || "0.0.0.0"
+            };
+            if (isDhcp) {
+                // Show what the device is actually using
+                app.elements.netIp.value      = app.dhcpActual.ip;
+                app.elements.netMask.value    = app.dhcpActual.mask;
+                app.elements.netGateway.value = app.dhcpActual.gateway;
+                app.elements.netDns1.value    = app.dhcpActual.dns1;
+            } else {
+                app.elements.netIp.value      = r.ip      || "";
+                app.elements.netMask.value    = r.mask    || "";
+                app.elements.netGateway.value = r.gateway || "";
+                app.elements.netDns1.value    = r.dns1    || "";
+            }
+            app.elements.netSntp.value = r.sntp || "";
+        } catch (e) { showToast(t("toast.load-network-failed"), "error"); }
     }
 
     async function saveNetworkConfig(app) {
@@ -227,12 +275,12 @@
         }
         try {
             var r = await window.MiOpenApi.postJson("/api/network/config", payload);
-            if (!r.success) { showToast(r.message || "Save failed.", "error"); return; }
-            if (!confirm("Network settings saved. The device needs to reboot to apply changes. Reboot now?")) return;
-            showToast("Network settings saved — rebooting…", "info", 8000);
-            fetch("/api/reboot", { method: "POST" }).catch(function(){});
+            if (!r.success) { showToast(r.message || t("toast.save-failed"), "error"); return; }
+            if (!confirm(t("confirm.network-reboot"))) return;
+            showToast(t("toast.network-saved-restarting"), "info", 8000);
+            window.MiOpenApi.postJson("/api/reboot", {}).catch(function(){});
         } catch (e) {
-            showToast("Error saving network config: " + (e.message || e), "error");
+            showToast(t("toast.error-saving-network", { message: e.message || e }), "error");
         }
     }
 
@@ -248,16 +296,23 @@
         app.elements.netSntp        = g("net-sntp");
 
         app.elements.netDhcpToggle.addEventListener("click", function () {
-            app.elements.netDhcp.checked = !app.elements.netDhcp.checked;
-            app.elements.netDhcpToggle.classList.toggle("on", app.elements.netDhcp.checked);
-            app.elements.netStaticFields.style.display = app.elements.netDhcp.checked ? "none" : "flex";
+            var wasDhcp = app.elements.netDhcp.checked;
+            app.elements.netDhcp.checked = !wasDhcp;
+            var isDhcp = app.elements.netDhcp.checked;
+            app.elements.netDhcpToggle.classList.toggle("on", isDhcp);
+            setNetworkStaticDisabled(app, isDhcp);
+            // Switching DHCP → static: pre-fill fields with the live DHCP values
+            if (wasDhcp && !isDhcp && app.dhcpActual) {
+                app.elements.netIp.value      = app.dhcpActual.ip;
+                app.elements.netMask.value    = app.dhcpActual.mask;
+                app.elements.netGateway.value = app.dhcpActual.gateway;
+                app.elements.netDns1.value    = app.dhcpActual.dns1;
+            }
         });
 
         g("net-config-save").addEventListener("click", function () { saveNetworkConfig(app); });
         loadNetworkConfig(app);
     }
-
-    // ── IO Controller Config ──────────────────────────────────────────────────
 
     async function loadIoConfig(app) {
         try {
@@ -266,7 +321,7 @@
             app.elements.ioTxPowerInput.value = r.tx_power  ?? "";
             app.elements.ioPassiveModeCheckbox.checked = !!r.passive_mode;
             app.elements.ioPassiveToggle.classList.toggle("on", !!r.passive_mode);
-        } catch (e) { showToast("Failed to load controller config.", "error"); }
+        } catch (e) { showToast(t("toast.load-controller-failed"), "error"); }
     }
 
     async function saveIoConfig(app) {
@@ -274,11 +329,11 @@
         const txPower = parseInt(app.elements.ioTxPowerInput.value);
 
         if (nodeId && !/^[0-9A-F]{6}$/.test(nodeId)) {
-            showToast("Node address must be exactly 6 hex characters.", "error");
+            showToast(t("toast.node-address-invalid"), "error");
             return;
         }
         if (app.elements.ioTxPowerInput.value !== "" && (isNaN(txPower) || txPower < 0 || txPower > 20)) {
-            showToast("TX Power must be 0–20.", "error");
+            showToast(t("toast.tx-power-invalid"), "error");
             return;
         }
 
@@ -288,10 +343,10 @@
 
         try {
             const r = await window.MiOpenApi.postJson("/api/io/config", payload);
-            if (!r.success) { showToast(r.message || "Save failed.", "error"); return; }
-            showToast("Controller settings saved. Reboot to apply.", "success");
+            if (!r.success) { showToast(r.message || t("toast.save-failed"), "error"); return; }
+            showToast(t("toast.controller-saved"), "success");
         } catch (e) {
-            showToast("Error saving controller settings: " + (e.message || e), "error");
+            showToast(t("toast.error-saving-controller", { message: e.message || e }), "error");
         }
     }
 
@@ -311,33 +366,10 @@
         loadIoConfig(app);
     }
 
-    // ── Access Password ───────────────────────────────────────────────────────
-
     function initAccessPassword(app) {
-        app.elements.accessPasswordNew     = g("access-password-new");
-        app.elements.accessPasswordConfirm = g("access-password-confirm");
-
-        g("access-password-save").addEventListener("click", async function () {
-            const pwd     = app.elements.accessPasswordNew.value;
-            const confirm = app.elements.accessPasswordConfirm.value;
-
-            if (pwd !== confirm) { showToast("Passwords do not match.", "error"); return; }
-            if (pwd.length > 0 && pwd.length < 8) { showToast("Password must be at least 8 characters (required for WPA2).", "error"); return; }
-            if (pwd.length > 32) { showToast("Password too long (max 32 characters).", "error"); return; }
-
-            try {
-                const r = await window.MiOpenApi.postJson("/api/misc/password", { password: pwd });
-                if (!r.success) { showToast(r.message || "Save failed.", "error"); return; }
-                showToast(pwd ? "Password saved. Reboot to apply." : "Password cleared. Reboot to apply.", "success");
-                app.elements.accessPasswordNew.value     = "";
-                app.elements.accessPasswordConfirm.value = "";
-            } catch (e) {
-                showToast("Error saving password: " + (e.message || e), "error");
-            }
-        });
+        app.elements.fallbackApPasswordNew     = g("fallback-ap-password-new");
+        app.elements.fallbackApPasswordConfirm = g("fallback-ap-password-confirm");
     }
-
-    // ── IO System Key ─────────────────────────────────────────────────────────
 
     let sniffPollTimer = null;
     let sniffCountdownTimer = null;
@@ -369,23 +401,23 @@
         const status = g("io-key-edit-status");
         const key = input.value.trim().toUpperCase();
         if (!/^[0-9A-F]{32}$/.test(key)) {
-            status.textContent = "Key must be exactly 32 hex characters (0-9, A-F).";
+            status.textContent = t("status.key-must-be-32-hex");
             status.style.color = "var(--red)";
             return;
         }
         try {
             const r = await window.MiOpenApi.postJson("/api/io/key", { key: key });
             if (!r.success) {
-                status.textContent = r.message || "Save failed.";
+                status.textContent = r.message || t("toast.save-failed");
                 status.style.color = "var(--red)";
                 return;
             }
             app.elements.ioKeyDisplay.value = key;
-            app.elements.ioKeyStatus.textContent = "Key saved. Reboot to apply.";
+            app.elements.ioKeyStatus.textContent = t("toast.key-saved-reboot");
             app.elements.ioKeyStatus.style.color = "var(--green)";
             closeIoKeyEditModal();
         } catch (e) {
-            status.textContent = "Error saving key: " + (e.message || e);
+            status.textContent = t("toast.error-saving-key", { message: e.message || e });
             status.style.color = "var(--red)";
         }
     }
@@ -424,7 +456,7 @@
         g("io-sniff-countdown").textContent = sniffSecondsLeft;
 
         try { await window.MiOpenApi.postJson("/api/io/sniff", { active: true }); } catch (e) {
-            g("io-sniff-status").textContent = "Failed to start: " + (e.message || e);
+            g("io-sniff-status").textContent = t("status.failed-to-start", { message: e.message || e });
             g("io-sniff-start").style.display = "";
             return;
         }
@@ -435,7 +467,7 @@
             if (sniffSecondsLeft <= 0) {
                 stopSniffPoll();
                 g("io-sniff-countdown-row").style.display = "none";
-                g("io-sniff-status").textContent = "No key captured. Try again.";
+                g("io-sniff-status").textContent = t("status.no-key-captured");
                 g("io-sniff-retry").style.display = "";
             }
         }, 1000);
@@ -469,7 +501,7 @@
         g("io-key-show").addEventListener("click", function () {
             const el = app.elements.ioKeyDisplay;
             el.type = el.type === "password" ? "text" : "password";
-            this.textContent = el.type === "password" ? "Show" : "Hide";
+            this.textContent = el.type === "password" ? t("button.show") : t("button.hide");
         });
 
         g("io-key-edit").addEventListener("click", function () {
@@ -514,29 +546,29 @@
         var btn = g("reboot-btn");
         if (!btn) return;
         btn.addEventListener("click", function () {
-            if (!confirm("Reboot the device now?")) return;
-            fetch("/api/reboot", { method: "POST" })
+            if (!confirm(t("confirm.reboot"))) return;
+            window.MiOpenApi.postJson("/api/reboot", {})
                 .then(function () {
-                    var rebootingToast = showToast("Rebooting…", "info", 60000);
+                    var rebootingToast = showToast(t("toast.rebooting"), "info", 60000);
                     var deadline = Date.now() + 60000;
                     function poll() {
                         if (Date.now() > deadline) {
                             if (rebootingToast) rebootingToast._dismiss();
-                            showToast("Device did not come back online.", "error");
+                            showToast(t("toast.device-offline"), "error");
                             return;
                         }
                         fetch("/api/devices?" + Date.now(), { cache: "no-store" })
                             .then(function (r) {
                                 if (r.ok) {
                                     if (rebootingToast) rebootingToast._dismiss();
-                                    showToast("Device is back online.", "success");
+                                    showToast(t("toast.device-online"), "success");
                                 } else { setTimeout(poll, 2000); }
                             })
                             .catch(function () { setTimeout(poll, 2000); });
                     }
                     setTimeout(poll, 5000);
                 })
-                .catch(function () { showToast("Reboot request failed.", "error"); });
+                .catch(function () { showToast(t("toast.reboot-failed"), "error"); });
         });
     }
 
@@ -546,6 +578,7 @@
         app.elements.fallbackRetriesBoot    = g("fallback-retries-boot");
         app.elements.fallbackRetriesRunning = g("fallback-retries-running");
         app.elements.fallbackTimeout        = g("fallback-timeout");
+        app.elements.fallbackApSsid         = g("fallback-ap-ssid");
         app.elements.fallbackStatus         = g("fallback-status");
         app.loadFallbackConfig = function () { return loadFallbackConfig(app); };
         app.saveFallbackConfig = function () { return saveFallbackConfig(app); };
@@ -580,21 +613,20 @@
         initIoKey(app);
         initReboot();
 
-        // Update channel toggle
         var betaCheckbox = g("update-channel-beta");
         var betaLabel = g("update-channel-label");
         var betaToggle = g("update-channel-toggle");
         if (betaCheckbox && betaToggle) {
             var savedChannel = localStorage.getItem("updateChannel") || "stable";
             betaCheckbox.checked = savedChannel === "beta";
-            betaLabel.textContent = betaCheckbox.checked ? "Include beta" : "Stable only";
+            betaLabel.textContent = betaCheckbox.checked ? t("button.include-beta") : t("button.stable-only");
             betaToggle.classList.toggle("on", betaCheckbox.checked);
 
             betaToggle.addEventListener("click", function () {
                 betaCheckbox.checked = !betaCheckbox.checked;
                 var channel = betaCheckbox.checked ? "beta" : "stable";
                 localStorage.setItem("updateChannel", channel);
-                betaLabel.textContent = betaCheckbox.checked ? "Include beta" : "Stable only";
+                betaLabel.textContent = betaCheckbox.checked ? t("button.include-beta") : t("button.stable-only");
                 betaToggle.classList.toggle("on", betaCheckbox.checked);
             });
         }
@@ -615,15 +647,14 @@
 
             scanBtn.addEventListener("click", function () {
                 scanBtn.disabled = true;
-                scanBtn.textContent = "Scanning…";
+                scanBtn.textContent = t("button.scanning");
                 scanResults.style.display = "none";
                 scanResults.innerHTML = "";
 
-                fetch("/api/wifi/scan?" + Date.now(), { cache: "no-store" })
-                    .then(function (r) { return r.json(); })
+                window.MiOpenApi.requestJson("/api/wifi/scan?" + Date.now())
                     .then(function (networks) {
                         if (!networks.length) {
-                            scanResults.innerHTML = "<div style='padding:8px;color:#888;font-size:.9em;'>No networks found.</div>";
+                            scanResults.innerHTML = "<div style='padding:8px;color:#888;font-size:.9em;'>" + t("status.no-networks-found") + "</div>";
                             scanResults.style.display = "block";
                             return;
                         }
@@ -645,10 +676,10 @@
                         });
                         scanResults.style.display = "block";
                     })
-                    .catch(function () { showToast("WiFi scan failed.", "error"); })
+                    .catch(function () { showToast(t("toast.wifi-scan-failed"), "error"); })
                     .finally(function () {
                         scanBtn.disabled = false;
-                        scanBtn.textContent = "Scan";
+                        scanBtn.textContent = t("button.scan");
                     });
             });
 
@@ -664,7 +695,6 @@
 
         var reloadInProgress = false;
         function reloadSettings() {
-            // Cancel any in-progress modal operations
             stopSniffPoll();
             if (learnCountdownTimer) { clearInterval(learnCountdownTimer); learnCountdownTimer = null; }
             if (pairDeviceCountdownTimer) { clearInterval(pairDeviceCountdownTimer); pairDeviceCountdownTimer = null; }
@@ -688,7 +718,7 @@
         app.uploadDevices = function () {
             return uploadSelectedFile(
                 app, app.elements.devicesFileInput, "/api/upload/devices",
-                "No devices file selected.", "Devices uploaded.",
+                t("toast.no-devices-file"), t("toast.devices-uploaded"),
                 async function () {
                     await app.fetchAndDisplayDevices();
                     await app.fetchAndDisplayRemotes();
@@ -698,7 +728,7 @@
         app.uploadRemotes = function () {
             return uploadSelectedFile(
                 app, app.elements.remotesFileInput, "/api/upload/remotes",
-                "No remotes file selected.", "Remotes uploaded.",
+                t("toast.no-remotes-file"), t("toast.remotes-uploaded"),
                 function () { return app.fetchAndDisplayRemotes(); }
             );
         };
@@ -713,8 +743,6 @@
         g("io-sniff-use-key").dataset.key = key;
         g("io-sniff-use-key").style.display = "";
     }
-
-    // ── IO Key Learn (receive key from TaHoma / Connectivity Kit) ────────────
 
     let learnCountdownTimer = null;
     let learnSecondsLeft = 0;
@@ -745,7 +773,7 @@
         g("io-learn-countdown").textContent = learnSecondsLeft;
 
         try { await window.MiOpenApi.postJson("/api/learn/start", {}); } catch (e) {
-            g("io-learn-status").textContent = "Failed to start: " + (e.message || e);
+            g("io-learn-status").textContent = e.message || "Failed to start.";
             g("io-learn-countdown-row").style.display = "none";
             g("io-learn-start").style.display = "";
             return;
@@ -757,7 +785,7 @@
             if (learnSecondsLeft <= 0) {
                 clearInterval(learnCountdownTimer); learnCountdownTimer = null;
                 g("io-learn-countdown-row").style.display = "none";
-                g("io-learn-status").textContent = "No key received. Try again.";
+                g("io-learn-status").textContent = t("status.no-key-received");
                 g("io-learn-retry").style.display = "";
             }
         }, 1000);
@@ -773,7 +801,7 @@
     function onLearnFailed() {
         if (learnCountdownTimer) { clearInterval(learnCountdownTimer); learnCountdownTimer = null; }
         g("io-learn-countdown-row").style.display = "none";
-        g("io-learn-status").textContent = "Handshake failed — TaHoma did not complete the key exchange.";
+        g("io-learn-status").textContent = t("status.handshake-failed");
         g("io-learn-retry").style.display = "";
     }
 
@@ -785,7 +813,7 @@
         g("io-learn-result-row").style.display = "";
         g("io-learn-use-key").dataset.key = key;
         g("io-learn-use-key").style.display = "";
-        g("io-learn-status").textContent = "Key received!";
+        g("io-learn-status").textContent = t("status.key-received");
     }
 
     function initLearnKey(app) {
@@ -810,8 +838,6 @@
             openIoKeyEditModal(app, key);
         });
     }
-
-    // ── Pair as Device (receive key via TaHoma "Add device" flow) ────────────
 
     let pairDeviceCountdownTimer = null;
     let pairDeviceSecondsLeft = 0;
@@ -842,7 +868,7 @@
         g("io-pair-device-countdown").textContent = pairDeviceSecondsLeft;
 
         try { await window.MiOpenApi.postJson("/api/pair-device/start", {}); } catch (e) {
-            g("io-pair-device-status").textContent = "Failed to start: " + (e.message || e);
+            g("io-pair-device-status").textContent = t("status.failed-to-start", { message: e.message || e });
             g("io-pair-device-countdown-row").style.display = "none";
             g("io-pair-device-start").style.display = "";
             return;
@@ -854,7 +880,7 @@
             if (pairDeviceSecondsLeft <= 0) {
                 clearInterval(pairDeviceCountdownTimer); pairDeviceCountdownTimer = null;
                 g("io-pair-device-countdown-row").style.display = "none";
-                g("io-pair-device-status").textContent = "No key received. Try again.";
+                g("io-pair-device-status").textContent = t("status.no-key-received");
                 g("io-pair-device-retry").style.display = "";
             }
         }, 1000);
@@ -870,7 +896,7 @@
     function onPairDeviceFailed() {
         if (pairDeviceCountdownTimer) { clearInterval(pairDeviceCountdownTimer); pairDeviceCountdownTimer = null; }
         g("io-pair-device-countdown-row").style.display = "none";
-        g("io-pair-device-status").textContent = "Handshake failed — TaHoma did not complete the key exchange.";
+        g("io-pair-device-status").textContent = t("status.handshake-failed");
         g("io-pair-device-retry").style.display = "";
     }
 
@@ -882,7 +908,7 @@
         g("io-pair-device-result-row").style.display = "";
         g("io-pair-device-use-key").dataset.key = key;
         g("io-pair-device-use-key").style.display = "";
-        g("io-pair-device-status").textContent = "Key received!";
+        g("io-pair-device-status").textContent = t("status.key-received");
     }
 
     function initPairDeviceKey(app) {
@@ -907,8 +933,6 @@
         });
     }
 
-    // ── Send Key observation ──────────────────────────────────────────────────
-
     let sendKeyTimer = null;
     let sendKeySeconds = 0;
 
@@ -927,7 +951,7 @@
         sendKeySeconds = 30;
         g("io-send-key-countdown").textContent = sendKeySeconds;
         try { await window.MiOpenApi.postJson("/api/send-key/start", {}); } catch (e) {
-            g("io-send-key-status").textContent = "Failed to start: " + (e.message || e);
+            g("io-send-key-status").textContent = t("status.failed-to-start", { message: e.message || e });
             g("io-send-key-countdown-row").style.display = "none";
             g("io-send-key-start").style.display = "";
             return;
@@ -938,7 +962,7 @@
             if (sendKeySeconds <= 0) {
                 clearInterval(sendKeyTimer); sendKeyTimer = null;
                 g("io-send-key-countdown-row").style.display = "none";
-                g("io-send-key-status").textContent = "Session ended. Check Graylog for observed frames.";
+                g("io-send-key-status").textContent = t("status.session-ended");
                 g("io-send-key-start").style.display = "";
             }
         }, 1000);
@@ -947,7 +971,7 @@
     function onSendKeyDone() {
         if (sendKeyTimer) { clearInterval(sendKeyTimer); sendKeyTimer = null; }
         g("io-send-key-countdown-row").style.display = "none";
-        g("io-send-key-status").textContent = "Session ended. Check Graylog for observed frames.";
+        g("io-send-key-status").textContent = t("status.session-ended");
         g("io-send-key-start").style.display = "";
     }
 
@@ -968,10 +992,33 @@
             this.classList.remove("open");
         });
         g("io-send-key-start").addEventListener("click", function () { startSendKey(); });
+
+        window.MiOpenApi.requestJson("/api/somfy/credentials").then(function(r){var e=document.getElementById("somfy-email");if(e&&r.email)e.value=r.email;}).catch(function(){});
+        var _se=document.getElementById("somfy-save");
+        if(_se)_se.addEventListener("click",async function(){var e=(document.getElementById("somfy-email")||{}).value||"",p=(document.getElementById("somfy-password")||{}).value||"",s=document.getElementById("somfy-status");if(!e||!p){if(s)s.textContent="Enter both email and password.";return;}try{var r=await window.MiOpenApi.postJson("/api/somfy/credentials",{email:e,password:p});if(s)s.textContent=r.success?"Saved.":(r.message||"Failed.");}catch(x){if(s)s.textContent="Error saving credentials.";}});
     }
 
     window.MiOpenSettings = {
         init: init,
+        refreshIoKey: function () { loadIoKey(window.MiOpenApp); },
+        refreshDynamicLabels: function () {
+            var app = window.MiOpenApp;
+            if (!app) return;
+            // Re-apply status strings that are rendered dynamically from JS
+            var mqttEl = g("mqtt-conn-status");
+            if (mqttEl && mqttEl._status) updateMqttStatusEl(mqttEl._status);
+            // Beta toggle label
+            var betaCheckbox = g("update-channel-beta");
+            var betaLabel = g("update-channel-label");
+            if (betaCheckbox && betaLabel) {
+                betaLabel.textContent = betaCheckbox.checked ? t("button.include-beta") : t("button.stable-only");
+            }
+            // Show/hide button on io-key
+            var showBtn = g("io-key-show");
+            if (showBtn && app.elements && app.elements.ioKeyDisplay) {
+                showBtn.textContent = app.elements.ioKeyDisplay.type === "password" ? t("button.show") : t("button.hide");
+            }
+        },
         onKeyCaptured: onKeyCaptured,
         onLearnActive: onLearnActive, onLearnFailed: onLearnFailed, onLearnKey: onLearnKey,
         onPairDeviceActive: onPairDeviceActive, onPairDeviceFailed: onPairDeviceFailed, onPairDeviceKey: onPairDeviceKey,
@@ -982,6 +1029,50 @@
 
 // ── Syslog (settings section) ─────────────────────────────────────────────────
 (function () {
+    var _pingInterval = null;
+
+    function updateSyslogStatusEl(status, extra) {
+        var el = document.getElementById("syslog-conn-status");
+        if (!el) return;
+        var map = {
+            checking:    { text: "\u25cc Checking…",  color: "#888" },
+            reachable:   { text: "\u25cf Reachable",   color: "#27ae60" },
+            unreachable: { text: "\u25cb Unreachable", color: "#e74c3c" },
+            disabled:    { text: "",              color: "" },
+            error:       { text: "\u2715 Error",       color: "#e74c3c" },
+        };
+        var s = map[status] || { text: "\u25cb " + status, color: "#888" };
+        if (status === "reachable" && extra != null) s.text += " (" + extra + "\u00a0ms)";
+        el.textContent = s.text;
+        el.style.color = s.color;
+    }
+
+    function stopPingPolling() {
+        if (_pingInterval) { clearInterval(_pingInterval); _pingInterval = null; }
+    }
+
+    async function pingAndUpdateStatus() {
+        updateSyslogStatusEl("checking");
+        try {
+            var r = await window.MiOpenApi.postJson("/api/syslog/ping");
+            if (r.reachable) {
+                updateSyslogStatusEl("reachable", r.latency_ms);
+            } else {
+                updateSyslogStatusEl("unreachable");
+            }
+        } catch (e) {
+            updateSyslogStatusEl("error");
+        }
+    }
+
+    function startPingPolling(app) {
+        stopPingPolling();
+        if (!app.elements.syslogEnabledInput.checked ||
+            !app.elements.syslogServerInput.value.trim()) return;
+        pingAndUpdateStatus();
+        _pingInterval = setInterval(pingAndUpdateStatus, 30 * 60 * 1000);
+    }
+
     async function loadSyslogConfig(app) {
         try {
             const cfg = await window.MiOpenApi.requestJson("/api/syslog");
@@ -992,6 +1083,8 @@
             app.elements.syslogFacilityInput.value     = cfg.facility  != null ? cfg.facility : "1";
             app.elements.syslogMinLevelInput.value     = cfg.min_level != null ? String(cfg.min_level) : "7";
             app.elements.syslogIdInput.value           = cfg.id        || "";
+            if (cfg.enabled && cfg.server) startPingPolling(app);
+            else { stopPingPolling(); updateSyslogStatusEl("disabled"); }
         } catch (error) {
             console.error("Error fetching syslog config", error);
         }
@@ -1001,7 +1094,7 @@
         try {
             const payload = {
                 enabled:   app.elements.syslogEnabledInput.checked,
-                server:    app.elements.syslogServerInput.value,
+                server:    app.elements.syslogServerInput.value.trim(),
                 port:      parseInt(app.elements.syslogPortInput.value, 10) || 514,
                 facility:  parseInt(app.elements.syslogFacilityInput.value, 10),
                 min_level: parseInt(app.elements.syslogMinLevelInput.value, 10)
@@ -1011,6 +1104,8 @@
             const result = await window.MiOpenApi.postJson("/api/syslog", payload);
             if (!result.success) { showToast(result.message || "Syslog save failed.", "error"); return; }
             showToast(result.message || "Syslog settings saved.", "success");
+            if (payload.enabled && payload.server) startPingPolling(app);
+            else { stopPingPolling(); updateSyslogStatusEl("disabled"); }
         } catch (error) {
             showToast("Error saving syslog config: " + (error.message || error), "error");
         }
@@ -1020,6 +1115,19 @@
         app.elements.syslogIdInput = document.getElementById("syslog-id");
         app.loadSyslogConfig   = function () { return loadSyslogConfig(app); };
         app.updateSyslogConfig = function () { return updateSyslogConfig(app); };
+
+        app.elements.syslogEnabledInput.addEventListener("change", function () {
+            if (!this.checked) { stopPingPolling(); updateSyslogStatusEl("disabled"); }
+        });
+
+        document.addEventListener("viewShown", function (e) {
+            if (e.detail && e.detail.view === "settings") {
+                if (app.elements.syslogEnabledInput.checked &&
+                    app.elements.syslogServerInput.value.trim()) {
+                    startPingPolling(app);
+                }
+            }
+        });
     }
 
     window.MiOpenSyslog = { init: init };

@@ -55,6 +55,8 @@
     </div>
   </div>
 
+  <div id="major-upgrade-banner" class="major-upgrade-banner" style="display:none"><div class="mub-inner">&#x26a0; <strong id="mub-tag"></strong> requires manual installation &mdash; OTA is not supported across major versions. <em>Export a backup first</em>, download <a id="mub-link" target="_blank">full.bin from GitHub</a> and flash with <a href="https://espressif.github.io/esptool-js/" target="_blank">ESP Web Flash</a> at address 0x0000, then restore your backup. <button id="mub-dismiss" class="update-banner-dismiss">&#x2715;</button></div></div>
+
   <!-- MAIN CONTENT -->
   <main>
 
@@ -66,6 +68,31 @@
         <button class="view-add-btn" id="pair-device-btn" title="Pair new device">+</button>
       </div>
       <ul id="device-list"></ul>
+
+      <div id="remotes-section">
+        <div id="remotes-section-hdr">
+          <span id="remotes-section-title" data-i18n="section.remotes">Remotes</span>
+          <div class="acc-summary" style="gap:8px;">
+            <span id="remotes-count"></span>
+            <button class="s-btn" id="remote-popup">+ Add</button>
+          </div>
+          <div class="acc-chevron" id="remotes-chevron"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></div>
+        </div>
+        <div id="remotes-body">
+          <div class="remotes-panel">
+            <table id="remote-table">
+              <thead>
+                <tr>
+                  <th data-i18n="table.remote_id">ID</th>
+                  <th data-i18n="table.linked_devices">Devices</th>
+                  <th data-i18n="table.edit">Edit</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
     </section>
 
     <!-- ── LOG VIEW ── -->
@@ -95,255 +122,361 @@
 
       <!-- NETWORK -->
       <div class="settings-group">
-        <div class="settings-group-label">Network</div>
+        <div class="settings-group-label" data-i18n="settings.group.network">Network</div>
         <div class="settings-card">
-          <!-- WiFi SSID -->
-          <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:8px;">
-            <div style="display:flex;align-items:center;justify-content:space-between;">
-              <span class="row-label">WiFi</span>
-              <span class="row-status connected" id="fallback-status"></span>
+          <!-- WiFi -->
+          <div class="acc-row" data-help="wifi">
+            <div class="acc-head">
+              <span class="row-label" data-i18n="settings.row.wifi">WiFi</span>
+              <div class="acc-summary">
+                <span class="acc-sum-val" id="acc-wifi-val"></span>
+                <span class="row-status" id="fallback-status"></span>
+              </div>
+              <div class="acc-chevron"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></div>
             </div>
-            <div style="display:flex;gap:6px;">
-              <div style="flex:1;">
-                <label style="font-size:11px;color:var(--text3);">Network name (SSID)</label>
-                <div style="display:flex;gap:6px;margin-top:4px;">
-                  <input type="text" id="wifi-ssid" class="s-input" placeholder="Network name" maxlength="32" style="flex:1;">
-                  <button class="s-btn" id="wifi-scan-btn">Scan</button>
+            <div class="acc-body">
+              <div class="acc-body-inner">
+                <div style="display:flex;gap:6px;">
+                  <div style="flex:1;">
+                    <label style="font-size:11px;color:var(--text3);" data-i18n="label.network-name-ssid">Network name (SSID)</label>
+                    <div style="display:flex;gap:6px;margin-top:4px;">
+                      <input type="text" id="wifi-ssid" class="s-input" placeholder="Network name" maxlength="32" style="flex:1;">
+                      <button class="s-btn" id="wifi-scan-btn" data-i18n="button.scan">Scan</button>
+                    </div>
+                  </div>
                 </div>
+                <div id="wifi-scan-results" style="display:none;"></div>
+                <div>
+                  <label style="font-size:11px;color:var(--text3);" data-i18n="label.password">Password</label>
+                  <input type="password" id="wifi-password" class="s-input" placeholder="Leave blank to keep current" data-i18n-placeholder="label.wifi-password-hint" style="margin-top:4px;">
+                </div>
+                <button class="s-btn primary" id="wifi-config-save" data-i18n="button.save-wifi">Save WiFi</button>
+                <div class="field-status" id="wifi-config-status"></div>
+                <p class="restart-notice" data-i18n="label.restart-notice">⚠ Device will restart after saving.</p>
               </div>
             </div>
-            <div id="wifi-scan-results" style="display:none;"></div>
-            <div>
-              <label style="font-size:11px;color:var(--text3);">Password</label>
-              <input type="password" id="wifi-password" class="s-input" placeholder="Leave blank to keep current" style="margin-top:4px;">
-            </div>
-            <div style="display:flex;gap:8px;align-items:center;">
-              <button class="s-btn primary" id="wifi-config-save" style="flex:1;">Save WiFi</button>
-            </div>
-            <div class="field-status" id="wifi-config-status"></div>
-            <p class="restart-notice">⚠ Device will restart after saving.</p>
           </div>
           <!-- Hostname & IP -->
-          <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:8px;">
-            <div style="display:flex;gap:6px;align-items:flex-end;">
-              <div style="flex:2">
-                <label style="font-size:11px;color:var(--text3);">Hostname</label>
-                <input type="text" id="net-hostname" class="s-input" placeholder="io-rts-esp32" maxlength="32" style="margin-top:4px;">
+          <div class="acc-row" data-help="network">
+            <div class="acc-head">
+              <span class="row-label" data-i18n="settings.row.network">Network</span>
+              <div class="acc-summary">
+                <span class="acc-sum-val" id="acc-net-val"></span>
               </div>
-              <div style="flex:1;display:flex;align-items:center;gap:8px;padding-bottom:2px;">
-                <span style="font-size:12px;color:var(--text2);">DHCP</span>
-                <div class="s-toggle" id="net-dhcp-toggle"></div>
-                <input type="checkbox" id="net-dhcp" style="display:none">
+              <div class="acc-chevron"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></div>
+            </div>
+            <div class="acc-body">
+              <div class="acc-body-inner">
+                <div style="display:flex;gap:6px;align-items:flex-end;">
+                  <div style="flex:2">
+                    <label style="font-size:11px;color:var(--text3);" data-i18n="label.hostname">Hostname</label>
+                    <input type="text" id="net-hostname" class="s-input" placeholder="io-rts-esp32" maxlength="32" style="margin-top:4px;">
+                  </div>
+                  <div style="flex:1;display:flex;align-items:center;gap:8px;padding-bottom:2px;">
+                    <span style="font-size:12px;color:var(--text2);" data-i18n="label.dhcp">DHCP</span>
+                    <div class="s-toggle" id="net-dhcp-toggle"></div>
+                    <input type="checkbox" id="net-dhcp" style="display:none">
+                  </div>
+                </div>
+                <div id="net-static-fields" style="flex-direction:column;gap:6px;display:flex;">
+                  <div style="display:flex;gap:6px;">
+                    <div style="flex:2">
+                      <label style="font-size:11px;color:var(--text3);" data-i18n="label.ip-address">IP Address</label>
+                      <input type="text" id="net-ip" class="s-input" placeholder="192.168.1.100" style="margin-top:4px;">
+                    </div>
+                    <div style="flex:1">
+                      <label style="font-size:11px;color:var(--text3);" data-i18n="label.subnet-mask">Subnet mask</label>
+                      <input type="text" id="net-mask" class="s-input" placeholder="255.255.255.0" style="margin-top:4px;">
+                    </div>
+                  </div>
+                  <div style="display:flex;gap:6px;">
+                    <div style="flex:1">
+                      <label style="font-size:11px;color:var(--text3);" data-i18n="label.gateway">Gateway</label>
+                      <input type="text" id="net-gateway" class="s-input" placeholder="192.168.1.1" style="margin-top:4px;">
+                    </div>
+                    <div style="flex:1">
+                      <label style="font-size:11px;color:var(--text3);" data-i18n="label.dns">DNS</label>
+                      <input type="text" id="net-dns1" class="s-input" placeholder="8.8.8.8" style="margin-top:4px;">
+                    </div>
+                  </div>
+                  <div>
+                    <label style="font-size:11px;color:var(--text3);" data-i18n="label.sntp-server">SNTP server</label>
+                    <input type="text" id="net-sntp" class="s-input" placeholder="pool.ntp.org" style="margin-top:4px;">
+                  </div>
+                </div>
+                <button class="s-btn primary" id="net-config-save" data-i18n="button.save-network">Save Network</button>
+                <p class="restart-notice" data-i18n="label.restart-notice">⚠ Device will restart after saving.</p>
               </div>
             </div>
-            <div id="net-static-fields" style="display:none;flex-direction:column;gap:6px;">
-              <div style="display:flex;gap:6px;">
-                <div style="flex:2">
-                  <label style="font-size:11px;color:var(--text3);">IP Address</label>
-                  <input type="text" id="net-ip" class="s-input" placeholder="192.168.1.100" style="margin-top:4px;">
-                </div>
-                <div style="flex:1">
-                  <label style="font-size:11px;color:var(--text3);">Subnet mask</label>
-                  <input type="text" id="net-mask" class="s-input" placeholder="255.255.255.0" style="margin-top:4px;">
-                </div>
-              </div>
-              <div style="display:flex;gap:6px;">
-                <div style="flex:1">
-                  <label style="font-size:11px;color:var(--text3);">Gateway</label>
-                  <input type="text" id="net-gateway" class="s-input" placeholder="192.168.1.1" style="margin-top:4px;">
-                </div>
-                <div style="flex:1">
-                  <label style="font-size:11px;color:var(--text3);">DNS</label>
-                  <input type="text" id="net-dns1" class="s-input" placeholder="8.8.8.8" style="margin-top:4px;">
-                </div>
-              </div>
-              <div>
-                <label style="font-size:11px;color:var(--text3);">SNTP server</label>
-                <input type="text" id="net-sntp" class="s-input" placeholder="pool.ntp.org" style="margin-top:4px;">
-              </div>
-            </div>
-            <button class="s-btn primary" id="net-config-save">Save Network</button>
-            <p class="restart-notice">⚠ Device will restart after saving.</p>
           </div>
-          <!-- Fallback AP -->
-          <div class="settings-row">
-            <span class="row-label">Fallback AP</span>
-            <div class="row-right">
-              <div class="s-toggle on" id="fallback-toggle"></div>
-              <input type="checkbox" id="fallback-enabled" style="display:none">
+          <!-- Fallback AP (merged) -->
+          <div class="acc-row" data-help="fallback-ap">
+            <div class="acc-head">
+              <span class="row-label" data-i18n="settings.row.fallback-ap">Fallback AP</span>
+              <div class="acc-summary">
+                <span class="acc-sum-val" id="acc-fap-val"></span>
+              </div>
+              <div class="acc-chevron"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></div>
             </div>
-          </div>
-          <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:8px;display:none;" id="fallback-extra">
-            <div style="display:flex;gap:8px;">
-              <div style="flex:1">
-                <label style="font-size:11px;color:var(--text3);">Retries (boot)</label>
-                <input type="number" id="fallback-retries-boot" class="s-input" min="1" max="20" placeholder="3" style="margin-top:4px;">
-              </div>
-              <div style="flex:1">
-                <label style="font-size:11px;color:var(--text3);">Retries (running)</label>
-                <input type="number" id="fallback-retries-running" class="s-input" min="1" max="20" placeholder="3" style="margin-top:4px;">
-              </div>
-              <div style="flex:1">
-                <label style="font-size:11px;color:var(--text3);">Timeout (s)</label>
-                <input type="number" id="fallback-timeout" class="s-input" min="0" max="3600" placeholder="600" style="margin-top:4px;">
+            <div class="acc-body">
+              <div class="acc-body-inner">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+                  <span style="font-size:12px;color:var(--text2);" data-i18n="label.enable-fallback-ap">Enable fallback hotspot</span>
+                  <div class="s-toggle on" id="fallback-toggle"></div>
+                  <input type="checkbox" id="fallback-enabled" style="display:none">
+                </div>
+                <div style="display:flex;gap:8px;">
+                  <div style="flex:2">
+                    <label style="font-size:11px;color:var(--text3);" data-i18n="label.hotspot-name">Hotspot name (SSID)</label>
+                    <input type="text" id="fallback-ap-ssid" class="s-input" maxlength="32" placeholder="io-rts-setup" style="margin-top:4px;">
+                  </div>
+                  <div style="flex:1">
+                    <label style="font-size:11px;color:var(--text3);" data-i18n="label.timeout-s">Timeout (s)</label>
+                    <input type="number" id="fallback-timeout" class="s-input" min="0" max="3600" placeholder="600" style="margin-top:4px;">
+                  </div>
+                </div>
+                <div style="display:flex;gap:8px;">
+                  <div style="flex:1">
+                    <label style="font-size:11px;color:var(--text3);" data-i18n="label.retries-boot">Retries (boot)</label>
+                    <input type="number" id="fallback-retries-boot" class="s-input" min="1" max="20" placeholder="3" style="margin-top:4px;">
+                  </div>
+                  <div style="flex:1">
+                    <label style="font-size:11px;color:var(--text3);" data-i18n="label.retries-running">Retries (running)</label>
+                    <input type="number" id="fallback-retries-running" class="s-input" min="1" max="20" placeholder="3" style="margin-top:4px;">
+                  </div>
+                </div>
+                <div style="display:flex;gap:8px;">
+                  <div style="flex:1">
+                    <label style="font-size:11px;color:var(--text3);" data-i18n="label.hotspot-password">Hotspot password (min 8 chars, blank = open)</label>
+                    <input type="password" id="fallback-ap-password-new" class="s-input" placeholder="Blank = clear password" style="margin-top:4px;">
+                  </div>
+                  <div style="flex:1">
+                    <label style="font-size:11px;color:var(--text3);" data-i18n="label.confirm-password">Confirm password</label>
+                    <input type="password" id="fallback-ap-password-confirm" class="s-input" placeholder="Confirm" style="margin-top:4px;">
+                  </div>
+                </div>
+                <div class="field-status" id="fallback-save-status"></div>
+                <button class="s-btn primary" id="fallback-save" data-i18n="button.save-fallback-ap">Save Fallback AP</button>
               </div>
             </div>
-            <button class="s-btn primary" id="fallback-save">Save Fallback</button>
           </div>
         </div>
       </div>
 
       <!-- INTEGRATION -->
       <div class="settings-group">
-        <div class="settings-group-label">Integration</div>
+        <div class="settings-group-label" data-i18n="settings.group.integration">Integration</div>
         <div class="settings-card">
           <!-- MQTT -->
-          <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:8px;">
-            <div style="display:flex;align-items:center;justify-content:space-between;">
-              <span class="row-label">MQTT</span>
-              <div style="display:flex;align-items:center;gap:8px;">
+          <div class="acc-row" data-help="mqtt">
+            <div class="acc-head">
+              <span class="row-label" data-i18n="settings.row.mqtt">MQTT</span>
+              <div class="acc-summary">
+                <span class="acc-sum-val" id="acc-mqtt-val"></span>
                 <span class="row-status" id="mqtt-conn-status"></span>
-                <div class="s-toggle" id="mqtt-enabled-toggle"></div>
-                <input type="checkbox" id="mqtt-enabled" style="display:none">
+              </div>
+              <div class="acc-chevron"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></div>
+            </div>
+            <div class="acc-body">
+              <div class="acc-body-inner">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+                  <span style="font-size:12px;color:var(--text2);" data-i18n="label.enable-mqtt">Enable MQTT</span>
+                  <div class="s-toggle" id="mqtt-enabled-toggle"></div>
+                  <input type="checkbox" id="mqtt-enabled" style="display:none">
+                </div>
+                <div style="display:flex;gap:6px;">
+                  <div style="flex:2;">
+                    <label style="font-size:11px;color:var(--text3);" data-i18n="label.broker-address">Broker address</label>
+                    <input type="text" id="mqtt-server" class="s-input" placeholder="192.168.1.x or hostname" style="margin-top:4px;">
+                  </div>
+                  <div style="flex:1;">
+                    <label style="font-size:11px;color:var(--text3);" data-i18n="label.port">Port</label>
+                    <input type="text" id="mqtt-port" class="s-input" placeholder="1883 / 8883 (TLS)" style="margin-top:4px;">
+                  </div>
+                </div>
+                <div style="display:flex;gap:6px;">
+                  <div style="flex:1;">
+                    <label style="font-size:11px;color:var(--text3);" data-i18n="label.username">Username</label>
+                    <input type="text" id="mqtt-user" class="s-input" placeholder="leave blank if none" style="margin-top:4px;">
+                  </div>
+                  <div style="flex:1;">
+                    <label style="font-size:11px;color:var(--text3);" data-i18n="label.password">Password</label>
+                    <input type="password" id="mqtt-password" class="s-input" placeholder="leave blank if none" style="margin-top:4px;">
+                  </div>
+                </div>
+                <div style="display:flex;gap:6px;">
+                  <div style="flex:1;">
+                    <label style="font-size:11px;color:var(--text3);" data-i18n="label.client-id">Client ID</label>
+                    <input type="text" id="mqtt-client-id" class="s-input" placeholder="blank = auto-generated" style="margin-top:4px;">
+                  </div>
+                  <div style="flex:1;">
+                    <label style="font-size:11px;color:var(--text3);" data-i18n="label.topic-prefix">Topic prefix</label>
+                    <input type="text" id="mqtt-topic" class="s-input" placeholder="e.g. home/io-rts" style="margin-top:4px;">
+                  </div>
+                </div>
+                <div>
+                  <label style="font-size:11px;color:var(--text3);" data-i18n="label.ha-discovery">Home Assistant discovery prefix</label>
+                  <input type="text" id="mqtt-discovery" class="s-input" placeholder="e.g. homeassistant/device/io-rts" style="margin-top:4px;">
+                </div>
+                <button class="s-btn primary" id="mqtt-update" data-i18n="button.save-mqtt">Save MQTT</button>
               </div>
             </div>
-            <div style="display:flex;gap:6px;">
-              <div style="flex:2;">
-                <label style="font-size:11px;color:var(--text3);">Broker address</label>
-                <input type="text" id="mqtt-server" class="s-input" placeholder="192.168.1.x or hostname" style="margin-top:4px;">
-              </div>
-              <div style="flex:1;">
-                <label style="font-size:11px;color:var(--text3);">Port</label>
-                <input type="text" id="mqtt-port" class="s-input" placeholder="1883 / 8883 (TLS)" style="margin-top:4px;">
-              </div>
-            </div>
-            <div style="display:flex;gap:6px;">
-              <div style="flex:1;">
-                <label style="font-size:11px;color:var(--text3);">Username</label>
-                <input type="text" id="mqtt-user" class="s-input" placeholder="leave blank if none" style="margin-top:4px;">
-              </div>
-              <div style="flex:1;">
-                <label style="font-size:11px;color:var(--text3);">Password</label>
-                <input type="password" id="mqtt-password" class="s-input" placeholder="leave blank if none" style="margin-top:4px;">
-              </div>
-            </div>
-            <div style="display:flex;gap:6px;">
-              <div style="flex:1;">
-                <label style="font-size:11px;color:var(--text3);">Client ID</label>
-                <input type="text" id="mqtt-client-id" class="s-input" placeholder="blank = auto-generated" style="margin-top:4px;">
-              </div>
-              <div style="flex:1;">
-                <label style="font-size:11px;color:var(--text3);">Topic prefix</label>
-                <input type="text" id="mqtt-topic" class="s-input" placeholder="e.g. home/io-rts" style="margin-top:4px;">
-              </div>
-            </div>
-            <div>
-              <label style="font-size:11px;color:var(--text3);">Home Assistant discovery prefix</label>
-              <input type="text" id="mqtt-discovery" class="s-input" placeholder="e.g. homeassistant/device/io-rts" style="margin-top:4px;">
-            </div>
-            <button class="s-btn primary" id="mqtt-update">Save MQTT</button>
           </div>
           <!-- Syslog -->
-          <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:8px;">
-            <div style="display:flex;align-items:center;justify-content:space-between;">
-              <span class="row-label">Syslog</span>
-              <div class="s-toggle" id="syslog-toggle"></div>
-              <input type="checkbox" id="syslog-enabled" style="display:none">
-            </div>
-            <div style="display:flex;gap:6px;">
-              <div style="flex:2;">
-                <label style="font-size:11px;color:var(--text3);">Server address</label>
-                <input type="text" id="syslog-server" class="s-input" placeholder="192.168.1.x" style="margin-top:4px;">
+          <div class="acc-row" data-help="syslog">
+            <div class="acc-head">
+              <span class="row-label" data-i18n="settings.row.syslog">Syslog</span>
+              <div class="acc-summary">
+                <span class="acc-sum-val" id="acc-syslog-val"></span>
+                <span class="row-status" id="syslog-conn-status"></span>
               </div>
-              <div style="flex:1;">
-                <label style="font-size:11px;color:var(--text3);">Port</label>
-                <input type="text" id="syslog-port" class="s-input" placeholder="514" style="margin-top:4px;">
+              <div class="acc-chevron"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></div>
+            </div>
+            <div class="acc-body">
+              <div class="acc-body-inner">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+                  <span style="font-size:12px;color:var(--text2);" data-i18n="label.enable-syslog">Enable syslog</span>
+                  <div class="s-toggle" id="syslog-toggle"></div>
+                  <input type="checkbox" id="syslog-enabled" style="display:none">
+                </div>
+                <div style="display:flex;gap:6px;">
+                  <div style="flex:2;">
+                    <label style="font-size:11px;color:var(--text3);" data-i18n="label.server-address">Server address</label>
+                    <input type="text" id="syslog-server" class="s-input" placeholder="192.168.1.x" style="margin-top:4px;">
+                  </div>
+                  <div style="flex:1;">
+                    <label style="font-size:11px;color:var(--text3);" data-i18n="label.port">Port</label>
+                    <input type="text" id="syslog-port" class="s-input" placeholder="514" style="margin-top:4px;">
+                  </div>
+                </div>
+                <div style="display:flex;gap:6px;">
+                  <div style="flex:1">
+                    <label style="font-size:11px;color:var(--text3);" data-i18n="label.facility">Facility</label>
+                    <input type="number" id="syslog-facility" class="s-input" min="0" max="23" placeholder="1" style="margin-top:4px;">
+                  </div>
+                  <div style="flex:1">
+                    <label style="font-size:11px;color:var(--text3);" data-i18n="label.min-level">Min level</label>
+                    <select id="syslog-min-level" class="s-select" style="margin-top:4px;">
+                      <option value="3">Error</option>
+                      <option value="4">Warning</option>
+                      <option value="6">Info</option>
+                      <option value="7">Debug</option>
+                    </select>
+                  </div>
+                </div>
+                <div style="display:flex;flex-direction:column;gap:4px;">
+                  <label style="font-size:11px;color:var(--text3);" data-i18n="label.device-identifier">Device identifier (shown in log)</label>
+                  <input type="text" id="syslog-id" class="s-input" placeholder="auto-generated" maxlength="15">
+                </div>
+                <button class="s-btn primary" id="syslog-update" data-i18n="button.save-syslog">Save Syslog</button>
               </div>
             </div>
-            <div style="display:flex;gap:6px;">
-              <div style="flex:1">
-                <label style="font-size:11px;color:var(--text3);">Facility</label>
-                <input type="number" id="syslog-facility" class="s-input" min="0" max="23" placeholder="1" style="margin-top:4px;">
+          </div>
+          <!-- Somfy / Overkiz -->
+          <div class="acc-row" data-help="somfy">
+            <div class="acc-head">
+              <span class="row-label" data-i18n="settings.row.somfy">Somfy / Overkiz</span>
+              <div class="acc-summary">
+                <span class="acc-sum-val" id="acc-somfy-val"></span>
               </div>
-              <div style="flex:1">
-                <label style="font-size:11px;color:var(--text3);">Min level</label>
-                <select id="syslog-min-level" class="s-select" style="margin-top:4px;">
-                  <option value="3">Error</option>
-                  <option value="4">Warning</option>
-                  <option value="6">Info</option>
-                  <option value="7">Debug</option>
-                </select>
+              <div class="acc-chevron"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></div>
+            </div>
+            <div class="acc-body">
+              <div class="acc-body-inner">
+                <div>
+                  <label style="font-size:11px;color:var(--text3);" data-i18n="label.somfy-email">Somfy account email</label>
+                  <input type="text" id="somfy-email" class="s-input" placeholder="your@somfy.com" style="margin-top:4px;" autocomplete="username">
+                </div>
+                <div>
+                  <label style="font-size:11px;color:var(--text3);" data-i18n="label.somfy-password">Somfy account password</label>
+                  <input type="password" id="somfy-password" class="s-input" placeholder="••••••••" style="margin-top:4px;" autocomplete="current-password">
+                </div>
+                <div style="display:flex;gap:8px;">
+                  <button class="s-btn primary" id="somfy-save" data-i18n="button.save-credentials">Save credentials</button>
+                  <button class="s-btn" id="somfy-import-btn" data-i18n="button.import-devices-btn">Import devices</button>
+                </div>
+                <span id="somfy-status" style="font-size:11px;color:var(--text3);min-height:16px;"></span>
               </div>
             </div>
-            <div style="display:flex;flex-direction:column;gap:4px;">
-              <label style="font-size:11px;color:var(--text3);">Device identifier (shown in log)</label>
-              <input type="text" id="syslog-id" class="s-input" placeholder="auto-generated" maxlength="15">
-            </div>
-            <button class="s-btn primary" id="syslog-update">Save Syslog</button>
           </div>
         </div>
       </div>
 
       <!-- SECURITY -->
       <div class="settings-group">
-        <div class="settings-group-label">Security</div>
+        <div class="settings-group-label" data-i18n="settings.group.security">Security</div>
         <div class="settings-card">
           <!-- Controller identity -->
-          <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:8px;">
-            <span class="row-label">Controller Identity</span>
-            <div style="display:flex;gap:6px;align-items:center;">
-              <div style="flex:1;">
-                <label style="font-size:11px;color:var(--text3);">Node Address (3 bytes hex)</label>
-                <input type="text" id="io-node-id" class="s-input" placeholder="A1B1C3" maxlength="6" style="font-family:var(--mono);text-transform:uppercase;margin-top:4px;">
+          <div class="acc-row" data-help="controller">
+            <div class="acc-head">
+              <span class="row-label" data-i18n="settings.row.controller">Controller Identity</span>
+              <div class="acc-summary">
+                <span class="acc-sum-val" id="acc-ctrl-val"></span>
               </div>
-              <div style="flex:1;">
-                <label style="font-size:11px;color:var(--text3);">TX Power (0–20 dBm)</label>
-                <input type="number" id="io-tx-power" class="s-input" min="0" max="20" placeholder="17" style="margin-top:4px;">
+              <div class="acc-chevron"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></div>
+            </div>
+            <div class="acc-body">
+              <div class="acc-body-inner">
+                <div style="display:flex;gap:6px;align-items:center;">
+                  <div style="flex:1;">
+                    <label style="font-size:11px;color:var(--text3);" data-i18n="label.node-address">Node Address (3 bytes hex)</label>
+                    <input type="text" id="io-node-id" class="s-input" placeholder="A1B1C3" maxlength="6" style="font-family:var(--mono);text-transform:uppercase;margin-top:4px;">
+                  </div>
+                  <div style="flex:1;">
+                    <label style="font-size:11px;color:var(--text3);" data-i18n="label.tx-power">TX Power (0–20 dBm)</label>
+                    <input type="number" id="io-tx-power" class="s-input" min="0" max="20" placeholder="17" style="margin-top:4px;">
+                  </div>
+                </div>
+                <div style="display:flex;align-items:center;gap:8px;">
+                  <span style="font-size:12px;color:var(--text2);" data-i18n="label.passive-mode">Passive mode (listen only)</span>
+                  <div class="s-toggle" id="io-passive-toggle"></div>
+                  <input type="checkbox" id="io-passive-mode" style="display:none">
+                </div>
+                <button class="s-btn primary" id="io-config-save" data-i18n="button.save-controller">Save Controller Settings</button>
               </div>
             </div>
-            <div style="display:flex;align-items:center;gap:8px;">
-              <span style="font-size:12px;color:var(--text2);">Passive mode (listen only)</span>
-              <div class="s-toggle" id="io-passive-toggle"></div>
-              <input type="checkbox" id="io-passive-mode" style="display:none">
-            </div>
-            <button class="s-btn primary" id="io-config-save">Save Controller Settings</button>
           </div>
           <!-- IO key -->
-          <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:8px;">
-            <span class="row-label">IO System Key</span>
-            <div class="sensitive-notice">Changing this key makes all paired devices unreachable until reboot.</div>
-            <div style="display:flex;gap:6px;align-items:center;">
-              <input type="password" id="io-key-display" class="s-input key-display" placeholder="(not set)" readonly style="flex:1;">
-              <button class="s-btn" id="io-key-show">Show</button>
-              <button class="s-btn" id="io-key-edit">Edit</button>
-              <button class="s-btn" id="io-key-sniff">Sniff</button>
-              <button class="s-btn" id="io-key-learn">Learn</button>
-              <button class="s-btn" id="io-key-pair-device">Pair</button>
-              <button class="s-btn" id="io-key-send-key">Send Key</button>
-            </div>
-            <span class="field-status" id="io-key-status"></span>
-          </div>
-          <!-- Access password -->
-          <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:8px;">
-            <span class="row-label">CLI / Web Access Password</span>
-            <div style="display:flex;gap:6px;">
-              <div style="flex:1;">
-                <label style="font-size:11px;color:var(--text3);">New password</label>
-                <input type="password" id="access-password-new" class="s-input" placeholder="Blank = clear password" style="margin-top:4px;">
+          <div class="acc-row" data-help="io-key">
+            <div class="acc-head">
+              <span class="row-label" data-i18n="settings.row.io-key">IO System Key</span>
+              <div class="acc-summary">
+                <span class="acc-sum-val" id="acc-iokey-val"></span>
               </div>
-              <div style="flex:1;">
-                <label style="font-size:11px;color:var(--text3);">Confirm password</label>
-                <input type="password" id="access-password-confirm" class="s-input" placeholder="Confirm" style="margin-top:4px;">
+              <div class="acc-chevron"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></div>
+            </div>
+            <div class="acc-body">
+              <div class="acc-body-inner">
+                <div class="sensitive-notice" data-i18n="label.io-key-warning">Changing this key makes all paired devices unreachable until reboot.</div>
+                <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+                  <input type="password" id="io-key-display" class="s-input key-display" placeholder="(not set)" readonly style="flex:1;min-width:140px;">
+                  <button class="s-btn" id="io-key-show" data-i18n="button.show">Show</button>
+                  <button class="s-btn" id="io-key-edit">Edit</button>
+                  <button class="s-btn" id="io-key-sniff">Sniff</button>
+                  <button class="s-btn" id="io-key-learn">Learn</button>
+                  <button class="s-btn" id="io-key-pair-device">Pair</button>
+                  <button class="s-btn" id="io-key-send-key">Send Key</button>
+                </div>
+                <span class="field-status" id="io-key-status"></span>
               </div>
             </div>
-            <button class="s-btn primary" id="access-password-save">Set Password</button>
           </div>
           <!-- OTA key -->
-          <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:8px;">
-            <span class="row-label">OTA Key</span>
-            <div style="display:flex;gap:6px;align-items:center;">
-              <input type="text" id="ota-key-display" class="s-input key-display" readonly style="flex:1;font-size:11px;">
-              <button class="s-btn" id="ota-key-edit">Edit</button>
+          <div class="acc-row" data-help="ota-key">
+            <div class="acc-head">
+              <span class="row-label" data-i18n="settings.row.ota-key">OTA Key</span>
+              <div class="acc-summary">
+                <span class="acc-sum-val" id="acc-otakey-val"></span>
+              </div>
+              <div class="acc-chevron"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></div>
+            </div>
+            <div class="acc-body">
+              <div class="acc-body-inner">
+                <div style="display:flex;gap:6px;align-items:center;">
+                  <input type="text" id="ota-key-display" class="s-input key-display" readonly style="flex:1;font-size:11px;">
+                  <button class="s-btn" id="ota-key-edit">Edit</button>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -351,97 +484,95 @@
 
       <!-- SYSTEM -->
       <div class="settings-group">
-        <div class="settings-group-label">System</div>
+        <div class="settings-group-label" data-i18n="settings.group.system">System</div>
         <div class="settings-card">
-          <!-- Firmware info -->
+          <!-- Firmware info (flat) -->
           <div class="settings-row">
-            <span class="row-label">Firmware</span>
-            <div class="row-right">
-              <span class="row-value" id="firmware-version"></span>
-            </div>
+            <span class="row-label" data-i18n="settings.row.firmware">Firmware</span>
+            <div class="row-right"><span class="row-value" id="firmware-version"></span></div>
           </div>
           <div class="settings-row">
-            <span class="row-label">Web UI</span>
-            <div class="row-right">
-              <span class="row-value" id="web-version"></span>
-            </div>
+            <span class="row-label" data-i18n="settings.row.web-ui">Web UI</span>
+            <div class="row-right"><span class="row-value" id="web-version"></span></div>
           </div>
-          <!-- OTA upload -->
-          <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:8px;">
-            <span class="row-label">Firmware Update</span>
-            <div>
-              <label style="font-size:11px;color:var(--text3);">Firmware file — use <strong>heltec-vX.X.X-firmware.bin</strong> from the GitHub release, not full.bin or web.bin</label>
-              <input type="file" id="ota-file" accept=".bin" class="s-input" style="padding:5px 10px;margin-top:4px;">
-            </div>
-            <button class="s-btn primary" id="ota-upload">Upload Firmware</button>
-            <progress id="ota-progress" max="100" value="0" style="display:none;"></progress>
-            <span id="ota-status" class="field-status"></span>
-          </div>
-          <!-- Web UI upload -->
-          <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:8px;">
-            <span class="row-label">Web UI Update</span>
-            <div>
-              <label style="font-size:11px;color:var(--text3);">Web UI file (.bin)</label>
-              <input type="file" id="ota-web-file" accept=".bin" class="s-input" style="padding:5px 10px;margin-top:4px;">
-            </div>
-            <button class="s-btn primary" id="ota-web-upload">Upload Web UI</button>
-            <progress id="ota-web-progress" max="100" value="0" style="display:none;"></progress>
-            <span id="ota-web-status" class="field-status"></span>
-          </div>
-          <!-- Devices backup -->
-          <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:8px;">
-            <span class="row-label" data-i18n="section.backup">Backup / Restore</span>
-            <div>
-              <label style="font-size:11px;color:var(--text3);">Devices (.json)</label>
-              <div style="display:flex;gap:6px;align-items:center;margin-top:4px;">
-                <input type="file" id="devices-file" accept=".json" class="s-input" style="flex:1;padding:5px 10px;">
-                <button class="s-btn" id="upload-devices">Upload</button>
-                <button class="s-btn" id="download-devices">Download</button>
+          <!-- Firmware Update -->
+          <div class="acc-row">
+            <div class="acc-head">
+              <span class="row-label" data-i18n="settings.row.firmware-update">Firmware Update</span>
+              <div class="acc-summary">
+                <span class="acc-sum-hint">Upload .bin file</span>
               </div>
+              <div class="acc-chevron"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></div>
             </div>
-            <div>
-              <label style="font-size:11px;color:var(--text3);">Remotes (.json)</label>
-              <div style="display:flex;gap:6px;align-items:center;margin-top:4px;">
-                <input type="file" id="remotes-file" accept=".json" class="s-input" style="flex:1;padding:5px 10px;">
-                <button class="s-btn" id="upload-remotes">Upload</button>
-                <button class="s-btn" id="download-remotes">Download</button>
+            <div class="acc-body">
+              <div class="acc-body-inner">
+                <div>
+                  <label style="font-size:11px;color:var(--text3);">Firmware file — use <strong>heltec-vX.X.X-firmware.bin</strong> from the GitHub release, not full.bin or web.bin</label>
+                  <input type="file" id="ota-file" accept=".bin" class="s-input" style="padding:5px 10px;margin-top:4px;">
+                </div>
+                <button class="s-btn primary" id="ota-upload" data-i18n="button.upload-firmware">Upload Firmware</button>
+                <progress id="ota-progress" max="100" value="0" style="display:none;"></progress>
+                <span id="ota-status" class="field-status"></span>
               </div>
             </div>
           </div>
-          <!-- Reboot -->
+          <!-- Web UI Update -->
+          <div class="acc-row">
+            <div class="acc-head">
+              <span class="row-label" data-i18n="settings.row.web-update">Web UI Update</span>
+              <div class="acc-summary">
+                <span class="acc-sum-hint">Upload .bin file</span>
+              </div>
+              <div class="acc-chevron"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></div>
+            </div>
+            <div class="acc-body">
+              <div class="acc-body-inner">
+                <div>
+                  <label style="font-size:11px;color:var(--text3);" data-i18n="label.web-ui-file">Web UI file (.bin)</label>
+                  <input type="file" id="ota-web-file" accept=".bin" class="s-input" style="padding:5px 10px;margin-top:4px;">
+                </div>
+                <button class="s-btn primary" id="ota-web-upload" data-i18n="button.upload-web-ui">Upload Web UI</button>
+                <progress id="ota-web-progress" max="100" value="0" style="display:none;"></progress>
+                <span id="ota-web-status" class="field-status"></span>
+              </div>
+            </div>
+          </div>
+          <!-- Backup / Restore -->
+          <div class="acc-row" data-help="backup">
+            <div class="acc-head">
+              <span class="row-label" data-i18n="settings.row.backup">Backup / Restore</span>
+              <div class="acc-summary">
+                <span class="acc-sum-hint">Export · Import · Reset</span>
+              </div>
+              <div class="acc-chevron"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></div>
+            </div>
+            <div class="acc-body">
+              <div class="acc-body-inner">
+                <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                  <button class="s-btn" id="backup-export" data-i18n="button.export-backup">Export Backup</button>
+                  <button class="s-btn" id="backup-import-btn" data-i18n="button.import-backup">Import Backup</button>
+                  <input type="file" id="backup-file" accept=".json" style="display:none">
+                  <button class="s-btn danger" id="factory-reset-btn" data-i18n="button.factory-reset">Factory Reset</button>
+                </div>
+                <span id="backup-status" class="field-status"></span>
+              </div>
+            </div>
+          </div>
+          <!-- Reboot (flat) -->
           <div class="settings-row">
-            <span class="row-label danger" id="reboot-btn" style="cursor:pointer;">Reboot Device</span>
+            <span class="row-label danger" id="reboot-btn" data-i18n="settings.row.reboot" style="cursor:pointer;">Reboot Device</span>
             <div class="row-right"><span class="row-chevron">›</span></div>
           </div>
-          <!-- Update channel -->
+          <!-- Update channel (flat) -->
           <div class="settings-row">
-            <span class="row-label">Software updates</span>
+            <span class="row-label" data-i18n="settings.row.software-updates">Software updates</span>
             <div style="display:flex;align-items:center;gap:8px;">
               <span style="font-size:12px;color:var(--text2);" id="update-channel-label">Stable only</span>
               <div class="s-toggle" id="update-channel-toggle"></div>
               <input type="checkbox" id="update-channel-beta" style="display:none">
+              <button class="s-btn" id="check-updates-btn" data-i18n="button.check">Check</button>
             </div>
           </div>
-        </div>
-      </div>
-
-      <!-- REMOTES -->
-      <div class="settings-group">
-        <div class="settings-group-label" data-i18n="section.remotes">Remotes</div>
-        <div style="display:flex;justify-content:flex-end;padding:0 4px 8px;">
-          <button class="s-btn" id="remote-popup">+ Add Remote</button>
-        </div>
-        <div class="remotes-panel">
-          <table id="remote-table">
-            <thead>
-              <tr>
-                <th data-i18n="table.remote_id">ID</th>
-                <th data-i18n="table.linked_devices">Devices</th>
-                <th data-i18n="table.edit">Edit</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
         </div>
       </div>
 
@@ -695,6 +826,7 @@
         <span id="arm-countdown" class="arm-countdown">30s</span>
       </div>
       <div class="key-modal-actions">
+        <button id="arm-capture-cancel" class="btn-ghost">Cancel</button>
         <button id="arm-skip-btn"  class="btn-ghost">Enter manually</button>
         <button id="arm-retry-btn" class="btn-ghost" style="display:none;">Retry</button>
       </div>
@@ -708,6 +840,7 @@
              style="font-family:var(--mono);text-transform:uppercase;letter-spacing:0.1em;">
       <p id="arm-manual-error" class="key-modal-status" style="color:var(--red);min-height:18px;"></p>
       <div class="key-modal-actions">
+        <button id="arm-manual-cancel" class="btn-ghost">Cancel</button>
         <button id="arm-manual-back" class="btn-ghost">Back</button>
         <button id="arm-manual-next" class="btn-danger-confirm">Next</button>
       </div>
@@ -738,6 +871,7 @@
 <script src="js/ota.js"></script>
 <script src="js/updater.js"></script>
 <script src="js/app.js"></script>
+<script src="js/help.js"></script>
 
 <script>
 // View switcher with scroll position memory
@@ -754,21 +888,20 @@ function showView(id, btn) {
     document.dispatchEvent(new CustomEvent('viewShown', { detail: { view: id } }));
 }
 
-// Fallback AP toggle — wire visual toggle to hidden checkbox
+// Fallback AP toggle
 (function(){
     var tog = document.getElementById('fallback-toggle');
     var chk = document.getElementById('fallback-enabled');
-    var extra = document.getElementById('fallback-extra');
     if (!tog || !chk) return;
     function sync() {
-        if (chk.checked) { tog.classList.add('on'); extra.style.display=''; }
-        else { tog.classList.remove('on'); extra.style.display='none'; }
+        if (chk.checked) tog.classList.add('on');
+        else tog.classList.remove('on');
+        if (window.updateAccSummaries) updateAccSummaries();
     }
     tog.addEventListener('click', function(){
         chk.checked = !chk.checked;
         sync();
     });
-    // settings.js dispatches 'change' after loading state
     chk.addEventListener('change', sync);
 })();
 
@@ -780,6 +913,7 @@ function showView(id, btn) {
     function sync() {
         if (chk.checked) tog.classList.add('on');
         else tog.classList.remove('on');
+        if (window.updateAccSummaries) updateAccSummaries();
     }
     tog.addEventListener('click', function(){
         chk.checked = !chk.checked;
@@ -788,12 +922,84 @@ function showView(id, btn) {
     chk.addEventListener('change', sync);
 })();
 
-// Reboot: settings.js expects a button, but we have a span acting as button
+// MQTT toggle summary refresh
 (function(){
-    var el = document.getElementById('reboot-btn');
-    if (!el) return;
-    // settings.js adds event listener to this element by ID, so it will work
+    var chk = document.getElementById('mqtt-enabled');
+    if (!chk) return;
+    chk.addEventListener('change', function(){ if (window.updateAccSummaries) updateAccSummaries(); });
 })();
+
+// Accordion: click header to open/close (don't intercept toggle clicks)
+document.querySelectorAll('.acc-row .acc-head').forEach(function(head) {
+    head.addEventListener('click', function(e) {
+        if (e.target.classList.contains('s-toggle') || e.target.closest('.s-toggle')) return;
+        var row = head.closest('.acc-row');
+        row.classList.toggle('open');
+        if (!row.classList.contains('open') && window.updateAccSummaries) updateAccSummaries();
+    });
+});
+
+// Populate collapsed-state summary values from current form inputs
+function updateAccSummaries() {
+    var ssid = document.getElementById('wifi-ssid');
+    var wifiVal = document.getElementById('acc-wifi-val');
+    if (ssid && wifiVal) wifiVal.textContent = ssid.value || '';
+
+    var host = document.getElementById('net-hostname');
+    var netVal = document.getElementById('acc-net-val');
+    if (host && netVal) netVal.textContent = host.value || '';
+
+    var fapSsid = document.getElementById('fallback-ap-ssid');
+    var fapChk  = document.getElementById('fallback-enabled');
+    var fapVal  = document.getElementById('acc-fap-val');
+    if (fapVal) {
+        var fapText = fapSsid ? (fapSsid.value || '') : '';
+        if (fapChk && !fapChk.checked) fapText = fapText ? fapText + ' (off)' : 'off';
+        fapVal.textContent = fapText;
+    }
+
+    var mqttSrv = document.getElementById('mqtt-server');
+    var mqttChk = document.getElementById('mqtt-enabled');
+    var mqttVal = document.getElementById('acc-mqtt-val');
+    if (mqttVal) {
+        var mqttText = mqttSrv ? (mqttSrv.value || '') : '';
+        if (mqttChk && !mqttChk.checked) mqttText = mqttText ? mqttText + ' (off)' : 'off';
+        mqttVal.textContent = mqttText;
+    }
+
+    var syslogSrv = document.getElementById('syslog-server');
+    var syslogChk = document.getElementById('syslog-enabled');
+    var syslogVal = document.getElementById('acc-syslog-val');
+    if (syslogVal) {
+        var syslogText = syslogSrv ? (syslogSrv.value || '') : '';
+        if (syslogChk && !syslogChk.checked) syslogText = syslogText ? syslogText + ' (off)' : 'off';
+        syslogVal.textContent = syslogText;
+    }
+
+    var somfyEmail = document.getElementById('somfy-email');
+    var somfyVal   = document.getElementById('acc-somfy-val');
+    if (somfyEmail && somfyVal) somfyVal.textContent = somfyEmail.value || '';
+
+    var nodeId  = document.getElementById('io-node-id');
+    var ctrlVal = document.getElementById('acc-ctrl-val');
+    if (nodeId && ctrlVal) ctrlVal.textContent = nodeId.value || '';
+
+    var iokeyEl  = document.getElementById('io-key-display');
+    var iokeyVal = document.getElementById('acc-iokey-val');
+    if (iokeyEl && iokeyVal) iokeyVal.textContent = iokeyEl.value ? '••••••••••••••••' : '(not set)';
+
+    var otakeyEl  = document.getElementById('ota-key-display');
+    var otakeyVal = document.getElementById('acc-otakey-val');
+    if (otakeyEl && otakeyVal) otakeyVal.textContent = otakeyEl.value ? '••••' : '';
+}
+window.updateAccSummaries = updateAccSummaries;
+
+// Refresh summaries when settings view is shown (after settings.js loads values)
+document.addEventListener('viewShown', function(e) {
+    if (e.detail && e.detail.view === 'settings') {
+        setTimeout(updateAccSummaries, 80);
+    }
+});
 </script>
 
 </body>

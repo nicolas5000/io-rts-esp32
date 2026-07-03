@@ -8,7 +8,7 @@ extern "C"
 #endif
 
     /// @brief Initialize command line
-    /// @param io_rts_manager Pointer to IoRtsManager object
+    /// @param io_rts_manager Pointer to IoRtsManager object (nullptr = skip IO commands)
     void init_cmdline(IoRts::IoRtsManager *io_rts_manager);
 
     /// @brief Initialize command line tools

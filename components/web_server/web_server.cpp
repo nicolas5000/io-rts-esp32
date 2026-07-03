@@ -1,6 +1,7 @@
 #include "web_server.h"
 #include "sdkconfig.h"
 #include "esp_log.h"
+#include "esp_netif.h"
 #include "esp_http_server.h"
 #include "esp_littlefs.h"
 #include "esp_random.h"
@@ -18,13 +19,19 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <netdb.h>
 #include <format>
 #include <list>
 #include <cmath>
+#include <ctime>
+#include <dirent.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
+#include "ping/ping_sock.h"
+#include "lwip/inet.h"
 
 #include "DeviceStorage.hpp"
 #include "syslog.h"
@@ -41,6 +48,8 @@
 #include "NetworkConfig.hpp"
 #include "IoHomeConfig.hpp"
 #include "MiscConfig.hpp"
+#include "JsonStreamingParser2.h"
+#include "JsonPathCallback.h"
 
 #if CONFIG_WEB_ENABLED
 
@@ -407,6 +416,7 @@ static esp_err_t api_devices_get(httpd_req_t *req)
         cJSON_AddBoolToObject(obj, "is_low_power",  dev.info.is_low_power);
         cJSON_AddBoolToObject(obj, "is_stopped",    dev.is_stopped);
         cJSON_AddBoolToObject(obj, "is_inverted",   dev.info.is_openclose_inverted);
+        cJSON_AddBoolToObject(obj, "is_quiet",      dev.quiet);
         cJSON_AddBoolToObject(obj, "tilt_supported",
             iohome::deviceTypeSupportsTilt(dev.info.device_type));
 
@@ -452,11 +462,20 @@ static volatile bool s_cal_cancel = false;
 static char s_cal_device_id[8] = {};
 struct CalibrationArg { char deviceID[8]; };
 static void calibration_task(void *arg); // forward declaration
+static bool ota_check_key(httpd_req_t *req); // forward declaration
+
+static std::string trim_str(const std::string &s) {
+    const auto ws = " \t\r\n";
+    size_t b = s.find_first_not_of(ws);
+    if (b == std::string::npos) return {};
+    return s.substr(b, s.find_last_not_of(ws) - b + 1);
+}
 
 // ─── POST /api/action ───────────────────────────────────────────────────────
 
 static esp_err_t api_action_post(httpd_req_t *req)
 {
+    if (!ota_check_key(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
     char *body = nullptr;
     if (read_body(req, &body) != ESP_OK) {
         send_result(req, false, "Failed to read body");
@@ -485,7 +504,11 @@ static esp_err_t api_action_post(httpd_req_t *req)
     bool ok = false;
 
     if (strcmp(action, "open") == 0) {
-        ok = s_manager->mIoHome->OpenDevice(deviceId);
+        s_manager->mIoDevicesMutex.lock();
+        auto qit = s_manager->mIoDevices.find(deviceId);
+        bool quiet = (qit != s_manager->mIoDevices.end()) ? qit->second.quiet : false;
+        s_manager->mIoDevicesMutex.unlock();
+        ok = s_manager->mIoHome->OpenDevice(deviceId, quiet);
         if (ok) {
             s_manager->mIoDevicesMutex.lock();
             auto it = s_manager->mIoDevices.find(deviceId);
@@ -495,7 +518,11 @@ static esp_err_t api_action_post(httpd_req_t *req)
             s_manager->ScheduleConfirmationPoll(deviceId, tt, dist);
         }
     } else if (strcmp(action, "close") == 0) {
-        ok = s_manager->mIoHome->CloseDevice(deviceId);
+        s_manager->mIoDevicesMutex.lock();
+        auto qit = s_manager->mIoDevices.find(deviceId);
+        bool quiet = (qit != s_manager->mIoDevices.end()) ? qit->second.quiet : false;
+        s_manager->mIoDevicesMutex.unlock();
+        ok = s_manager->mIoHome->CloseDevice(deviceId, quiet);
         if (ok) {
             s_manager->mIoDevicesMutex.lock();
             auto it = s_manager->mIoDevices.find(deviceId);
@@ -508,7 +535,11 @@ static esp_err_t api_action_post(httpd_req_t *req)
         ok = s_manager->mIoHome->StopDevice(deviceId);
         if (ok) s_manager->ScheduleConfirmationPoll(deviceId, 0, 0.0f); // poll soon after stop
     } else if (strcmp(action, "position") == 0 && value >= 0 && value <= 100) {
-        ok = s_manager->mIoHome->SetDevicePosition(deviceId, (uint8_t)value);
+        s_manager->mIoDevicesMutex.lock();
+        auto qit = s_manager->mIoDevices.find(deviceId);
+        bool quiet = (qit != s_manager->mIoDevices.end()) ? qit->second.quiet : false;
+        s_manager->mIoDevicesMutex.unlock();
+        ok = s_manager->mIoHome->SetDevicePosition(deviceId, (uint8_t)value, quiet);
         if (ok) {
             s_manager->mIoDevicesMutex.lock();
             auto it = s_manager->mIoDevices.find(deviceId);
@@ -524,6 +555,12 @@ static esp_err_t api_action_post(httpd_req_t *req)
     } else if (strcmp(action, "invertOpenClose") == 0) {
         s_manager->mIoHome->InvertOpenClosePositionForDevice(deviceId);
         ok = true;
+    } else if (strcmp(action, "setQuiet") == 0) {
+        cJSON *jVal = cJSON_GetObjectItem(json, "value");
+        if (cJSON_IsBool(jVal))
+            ok = s_manager->SetQuiet(deviceId, cJSON_IsTrue(jVal));
+        else
+            ok = false;
     } else if (strcmp(action, "rename") == 0) {
         cJSON *jName = cJSON_GetObjectItem(json, "value");
         const char *newName = cJSON_IsString(jName) ? jName->valuestring : "";
@@ -634,6 +671,7 @@ static esp_err_t api_debug_get(httpd_req_t *req)
 
 static esp_err_t api_mqtt_get(httpd_req_t *req)
 {
+    if (!ota_check_key(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
     cJSON *obj = cJSON_CreateObject();
     cJSON_AddStringToObject(obj, "user",        Config::MqttConfig::GetClientUsername().c_str());
     cJSON_AddStringToObject(obj, "server",      Config::MqttConfig::GetBrokerAddress().c_str());
@@ -654,6 +692,7 @@ static esp_err_t api_mqtt_get(httpd_req_t *req)
 
 static esp_err_t api_mqtt_post(httpd_req_t *req)
 {
+    if (!ota_check_key(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
     char *body = nullptr;
     if (read_body(req, &body) != ESP_OK) {
         send_result(req, false, "Failed to read body");
@@ -669,12 +708,12 @@ static esp_err_t api_mqtt_post(httpd_req_t *req)
         return cJSON_IsString(item) ? std::string(item->valuestring) : "";
     };
 
-    std::string user      = get_str("user");
-    std::string server    = get_str("server");
+    std::string user      = trim_str(get_str("user"));
+    std::string server    = trim_str(get_str("server"));
     std::string password  = get_str("password");
-    std::string client_id = get_str("client_id");
-    std::string topic     = get_str("topic");
-    std::string discovery = get_str("discovery");
+    std::string client_id = trim_str(get_str("client_id"));
+    std::string topic     = trim_str(get_str("topic"));
+    std::string discovery = trim_str(get_str("discovery"));
     cJSON *jPort = cJSON_GetObjectItem(json, "port");
 
     if (!user.empty())      Config::MqttConfig::SetClientUsername(user);
@@ -689,12 +728,18 @@ static esp_err_t api_mqtt_post(httpd_req_t *req)
         int p = atoi(jPort->valuestring);
         if (p > 0) Config::MqttConfig::SetBrokerPort((uint16_t)p);
     }
+    bool anyChanged = !user.empty() || !server.empty() || !password.empty() ||
+                      !client_id.empty() || !topic.empty() || !discovery.empty() ||
+                      cJSON_IsNumber(jPort) || cJSON_IsString(jPort);
     cJSON *jEnabled = cJSON_GetObjectItem(json, "enabled");
     if (cJSON_IsBool(jEnabled)) {
         Config::MqttConfig::Activate(cJSON_IsTrue(jEnabled));
-        if (cJSON_IsTrue(jEnabled) && s_manager != nullptr)
-            s_manager->TriggerMqttStart();
+        anyChanged = true;
     }
+
+    // Restart MQTT client whenever config changes so new settings take effect immediately
+    if (anyChanged && s_manager != nullptr)
+        s_manager->TriggerMqttRestart();
 
     cJSON_Delete(json);
     send_result(req, true, "MQTT config saved.");
@@ -760,9 +805,9 @@ static void ota_key_init(void)
         s_ota_key[OTA_KEY_LEN] = '\0';
         nvs_set_str(h, "api_key", s_ota_key);
         nvs_commit(h);
-        ESP_LOGI(TAG, "OTA key (generated): %s", s_ota_key);
+        ESP_LOGI(TAG, "OTA key (generated): set (%d chars)", OTA_KEY_LEN);
     } else if (err == ESP_OK) {
-        ESP_LOGI(TAG, "OTA key (loaded): %s", s_ota_key);
+        ESP_LOGI(TAG, "OTA key (loaded): set (%d chars)", OTA_KEY_LEN);
     } else {
         ESP_LOGE(TAG, "OTA: NVS read error: %s", esp_err_to_name(err));
     }
@@ -773,7 +818,10 @@ static bool ota_check_key(httpd_req_t *req)
 {
     char key_hdr[OTA_KEY_LEN + 1] = {};
     esp_err_t err = httpd_req_get_hdr_value_str(req, "X-OTA-Key", key_hdr, sizeof(key_hdr));
-    bool ok = (err == ESP_OK) && (memcmp(key_hdr, s_ota_key, OTA_KEY_LEN) == 0);
+    uint8_t diff = (err != ESP_OK) ? 1 : 0;
+    for (int i = 0; i < OTA_KEY_LEN; i++)
+        diff |= (uint8_t)key_hdr[i] ^ (uint8_t)s_ota_key[i];
+    bool ok = (diff == 0);
     if (!ok) {
         int fd = httpd_req_to_sockfd(req);
         struct sockaddr_in addr = {};
@@ -801,6 +849,7 @@ static esp_err_t api_wifi_config_get(httpd_req_t *req)
 
 static esp_err_t api_wifi_config_post(httpd_req_t *req)
 {
+    if (!ota_check_key(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
     char body[256] = {};
     int len = httpd_req_recv(req, body, sizeof(body) - 1);
     if (len <= 0) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Empty body"); return ESP_OK; }
@@ -846,6 +895,7 @@ static esp_err_t api_wifi_fallback_get(httpd_req_t *req)
     cJSON_AddNumberToObject(obj, "retries_boot",   Helpers::NetworkHelpers_GetRetriesBoot());
     cJSON_AddNumberToObject(obj, "retries_running",Helpers::NetworkHelpers_GetRetriesRunning());
     cJSON_AddNumberToObject(obj, "ap_timeout_s",   Helpers::NetworkHelpers_GetApTimeoutS());
+    cJSON_AddStringToObject(obj, "ap_ssid",        Helpers::NetworkHelpers_GetApSsid().c_str());
     cJSON_AddBoolToObject(obj, "ap_running",       Helpers::NetworkHelpers_IsFallbackApRunning());
     cJSON_AddBoolToObject(obj, "connected",        Helpers::NetworkHelpers::isConnected());
     send_json(req, obj);
@@ -856,6 +906,7 @@ static esp_err_t api_wifi_fallback_get(httpd_req_t *req)
 
 static esp_err_t api_wifi_fallback_post(httpd_req_t *req)
 {
+    if (!ota_check_key(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
     char body[256] = {};
     int len = httpd_req_recv(req, body, sizeof(body) - 1);
     if (len <= 0) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Empty body"); return ESP_OK; }
@@ -863,16 +914,19 @@ static esp_err_t api_wifi_fallback_post(httpd_req_t *req)
     cJSON *root = cJSON_ParseWithLength(body, len);
     if (!root) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON"); return ESP_OK; }
 
-    bool     enabled = Helpers::NetworkHelpers_GetFallbackEnabled();
-    int      rb      = Helpers::NetworkHelpers_GetRetriesBoot();
-    int      rr      = Helpers::NetworkHelpers_GetRetriesRunning();
-    uint32_t tmo     = Helpers::NetworkHelpers_GetApTimeoutS();
+    bool        enabled = Helpers::NetworkHelpers_GetFallbackEnabled();
+    int         rb      = Helpers::NetworkHelpers_GetRetriesBoot();
+    int         rr      = Helpers::NetworkHelpers_GetRetriesRunning();
+    uint32_t    tmo     = Helpers::NetworkHelpers_GetApTimeoutS();
+    std::string ssid    = Helpers::NetworkHelpers_GetApSsid();
 
     cJSON *item;
     if ((item = cJSON_GetObjectItem(root, "enabled"))          && cJSON_IsBool(item))   enabled = cJSON_IsTrue(item);
-    if ((item = cJSON_GetObjectItem(root, "retries_boot"))     && cJSON_IsNumber(item)) rb  = (int)item->valuedouble;
-    if ((item = cJSON_GetObjectItem(root, "retries_running"))  && cJSON_IsNumber(item)) rr  = (int)item->valuedouble;
-    if ((item = cJSON_GetObjectItem(root, "ap_timeout_s"))     && cJSON_IsNumber(item)) tmo = (uint32_t)item->valuedouble;
+    if ((item = cJSON_GetObjectItem(root, "retries_boot"))     && cJSON_IsNumber(item)) rb   = (int)item->valuedouble;
+    if ((item = cJSON_GetObjectItem(root, "retries_running"))  && cJSON_IsNumber(item)) rr   = (int)item->valuedouble;
+    if ((item = cJSON_GetObjectItem(root, "ap_timeout_s"))     && cJSON_IsNumber(item)) tmo  = (uint32_t)item->valuedouble;
+    if ((item = cJSON_GetObjectItem(root, "ap_ssid"))          && cJSON_IsString(item) && strlen(item->valuestring) > 0)
+        ssid = item->valuestring;
     cJSON_Delete(root);
 
     // Clamp to valid ranges
@@ -881,9 +935,10 @@ static esp_err_t api_wifi_fallback_post(httpd_req_t *req)
     if (rr  < 1)    rr  = 1;
     if (rr  > 20)   rr  = 20;
     if (tmo > 3600) tmo = 3600;
+    if (ssid.length() > 32) ssid = ssid.substr(0, 32);
 
     // Apply immediately
-    Helpers::NetworkHelpers_SetFallbackConfig(enabled, rb, rr, tmo);
+    Helpers::NetworkHelpers_SetFallbackConfig(enabled, rb, rr, tmo, ssid);
 
     // Persist to NVS
     nvs_handle_t h;
@@ -892,6 +947,7 @@ static esp_err_t api_wifi_fallback_post(httpd_req_t *req)
         nvs_set_i32(h, "retries_boot", rb);
         nvs_set_i32(h, "retries_run",  rr);
         nvs_set_u32(h, "ap_timeout_s", tmo);
+        nvs_set_str(h, "ap_ssid",      ssid.c_str());
         nvs_commit(h);
         nvs_close(h);
     }
@@ -906,6 +962,7 @@ static esp_err_t api_wifi_fallback_post(httpd_req_t *req)
 
 static esp_err_t api_wifi_scan_get(httpd_req_t *req)
 {
+    if (!ota_check_key(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
     wifi_scan_config_t scan_cfg = {};
     scan_cfg.scan_type = WIFI_SCAN_TYPE_PASSIVE;
     esp_wifi_scan_start(&scan_cfg, true); // blocking
@@ -949,6 +1006,7 @@ static esp_err_t api_ota_key_get(httpd_req_t *req)
 
 static esp_err_t api_ota_key_post(httpd_req_t *req)
 {
+    if (!ota_check_key(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
     char *body = nullptr;
     if (read_body(req, &body) != ESP_OK) {
         send_result(req, false, "Failed to read body");
@@ -1328,7 +1386,7 @@ static esp_err_t api_syslog_post(httpd_req_t *req)
     cJSON *jId       = cJSON_GetObjectItem(json, "id");
 
     if (cJSON_IsBool(jEnabled))   Config::SyslogConfig::SetEnabled(cJSON_IsTrue(jEnabled));
-    if (cJSON_IsString(jServer))  Config::SyslogConfig::SetServer(jServer->valuestring);
+    if (cJSON_IsString(jServer))  Config::SyslogConfig::SetServer(trim_str(jServer->valuestring));
     if (cJSON_IsNumber(jPort))    Config::SyslogConfig::SetPort((uint16_t)jPort->valuedouble);
     if (cJSON_IsNumber(jFacility)) Config::SyslogConfig::SetFacility((uint8_t)jFacility->valuedouble);
     if (cJSON_IsNumber(jMinLevel)) Config::SyslogConfig::SetMinLevel((uint8_t)jMinLevel->valuedouble);
@@ -1346,6 +1404,106 @@ static esp_err_t api_syslog_post(httpd_req_t *req)
     cJSON_Delete(json);
     syslog_apply_config();
     send_result(req, true, "Syslog config saved");
+    return ESP_OK;
+}
+
+// ─── POST /api/syslog/ping ──────────────────────────────────────────────────
+
+struct SyslogPingResult {
+    SemaphoreHandle_t sem;
+    bool reachable;
+    uint32_t latency_ms;
+};
+
+static void syslog_ping_success_cb(esp_ping_handle_t hdl, void *args)
+{
+    auto *r = static_cast<SyslogPingResult *>(args);
+    esp_ping_get_profile(hdl, ESP_PING_PROF_TIMEGAP, &r->latency_ms, sizeof(r->latency_ms));
+    r->reachable = true;
+    xSemaphoreGive(r->sem);
+}
+
+static void syslog_ping_timeout_cb(esp_ping_handle_t hdl, void *args)
+{
+    auto *r = static_cast<SyslogPingResult *>(args);
+    r->reachable = false;
+    xSemaphoreGive(r->sem);
+}
+
+static esp_err_t api_syslog_ping_post(httpd_req_t *req)
+{
+    std::string server = Config::SyslogConfig::GetServer();
+    if (!Config::SyslogConfig::isEnabled() || server.empty()) {
+        cJSON *obj = cJSON_CreateObject();
+        cJSON_AddBoolToObject(obj, "reachable", false);
+        cJSON_AddStringToObject(obj, "message", "Syslog not configured");
+        send_json(req, obj);
+        return ESP_OK;
+    }
+
+    // Resolve server address
+    struct addrinfo hints = {};
+    hints.ai_family   = AF_INET;
+    hints.ai_socktype = SOCK_DGRAM;
+    struct addrinfo *res = nullptr;
+    if (getaddrinfo(server.c_str(), nullptr, &hints, &res) != 0 || !res) {
+        cJSON *obj = cJSON_CreateObject();
+        cJSON_AddBoolToObject(obj, "reachable", false);
+        cJSON_AddStringToObject(obj, "message", "Cannot resolve server address");
+        send_json(req, obj);
+        return ESP_OK;
+    }
+    ip_addr_t target;
+    auto *sin = reinterpret_cast<struct sockaddr_in *>(res->ai_addr);
+    ip4_addr_set_u32(ip_2_ip4(&target), sin->sin_addr.s_addr);
+    IP_SET_TYPE_VAL(target, IPADDR_TYPE_V4);
+    freeaddrinfo(res);
+
+    SyslogPingResult result = {};
+    result.sem = xSemaphoreCreateBinary();
+    if (!result.sem) {
+        cJSON *obj = cJSON_CreateObject();
+        cJSON_AddBoolToObject(obj, "reachable", false);
+        cJSON_AddStringToObject(obj, "message", "Internal error");
+        send_json(req, obj);
+        return ESP_OK;
+    }
+
+    esp_ping_config_t cfg = ESP_PING_DEFAULT_CONFIG();
+    cfg.target_addr  = target;
+    cfg.count        = 1;
+    cfg.timeout_ms   = 3000;
+    cfg.task_stack_size = 4096;
+
+    esp_ping_callbacks_t cbs = {};
+    cbs.cb_args        = &result;
+    cbs.on_ping_success = syslog_ping_success_cb;
+    cbs.on_ping_timeout = syslog_ping_timeout_cb;
+
+    esp_ping_handle_t hdl = nullptr;
+    if (esp_ping_new_session(&cfg, &cbs, &hdl) != ESP_OK) {
+        vSemaphoreDelete(result.sem);
+        cJSON *obj = cJSON_CreateObject();
+        cJSON_AddBoolToObject(obj, "reachable", false);
+        cJSON_AddStringToObject(obj, "message", "Failed to start ping");
+        send_json(req, obj);
+        return ESP_OK;
+    }
+
+    esp_ping_start(hdl);
+    // Block until success or timeout callback fires (max 4 s)
+    xSemaphoreTake(result.sem, pdMS_TO_TICKS(4000));
+    esp_ping_stop(hdl);
+    esp_ping_delete_session(hdl);
+    vSemaphoreDelete(result.sem);
+
+    cJSON *obj = cJSON_CreateObject();
+    cJSON_AddBoolToObject(obj, "reachable", result.reachable);
+    if (result.reachable)
+        cJSON_AddNumberToObject(obj, "latency_ms", result.latency_ms);
+    else
+        cJSON_AddStringToObject(obj, "message", "No response within 3 seconds");
+    send_json(req, obj);
     return ESP_OK;
 }
 
@@ -1371,6 +1529,7 @@ static esp_err_t api_reboot_post(httpd_req_t *req)
 
 static esp_err_t api_io_key_get(httpd_req_t *req)
 {
+    if (!ota_check_key(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
     cJSON *obj = cJSON_CreateObject();
     cJSON_AddStringToObject(obj, "key", Config::IoHomeConfig::GetIoSystemKey().c_str());
     send_json(req, obj);
@@ -1408,6 +1567,7 @@ static esp_err_t api_io_key_post(httpd_req_t *req)
 
 static esp_err_t api_io_sniff_get(httpd_req_t *req)
 {
+    if (!ota_check_key(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
     cJSON *obj = cJSON_CreateObject();
     bool active = s_manager && s_manager->IsKeySniffActive();
     cJSON_AddBoolToObject(obj, "active", active);
@@ -1424,6 +1584,7 @@ static esp_err_t api_io_sniff_get(httpd_req_t *req)
 
 static esp_err_t api_io_sniff_post(httpd_req_t *req)
 {
+    if (!ota_check_key(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
     char *body = nullptr;
     if (read_body(req, &body) != ESP_OK) { send_result(req, false, "Failed to read body"); return ESP_OK; }
 
@@ -1463,6 +1624,7 @@ static esp_err_t api_io_config_get(httpd_req_t *req)
 
 static esp_err_t api_io_config_post(httpd_req_t *req)
 {
+    if (!ota_check_key(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
     char *body = nullptr;
     if (read_body(req, &body) != ESP_OK) { send_result(req, false, "Failed to read body"); return ESP_OK; }
 
@@ -1563,6 +1725,30 @@ static esp_err_t api_network_config_get(httpd_req_t *req)
     cJSON_AddStringToObject(obj, "dns1",     Config::NetworkConfig::GetMainDNSAddress().c_str());
     cJSON_AddStringToObject(obj, "dns2",     Config::NetworkConfig::GetBackupDNSAddress().c_str());
     cJSON_AddStringToObject(obj, "sntp",     Config::NetworkConfig::GetSNTPAddress().c_str());
+
+    // Actual runtime IP (from DHCP lease or active static config)
+    char actual_ip[16] = "0.0.0.0", actual_mask[16] = "0.0.0.0";
+    char actual_gw[16] = "0.0.0.0", actual_dns1[16] = "0.0.0.0";
+    const char *netif_keys[] = {"WIFI_STA_DEF", "ETH_DEF", nullptr};
+    for (int i = 0; netif_keys[i]; i++) {
+        esp_netif_t *netif = esp_netif_get_handle_from_ifkey(netif_keys[i]);
+        if (!netif) continue;
+        esp_netif_ip_info_t ip_info;
+        if (esp_netif_get_ip_info(netif, &ip_info) == ESP_OK) {
+            esp_ip4addr_ntoa(&ip_info.ip,      actual_ip,   sizeof(actual_ip));
+            esp_ip4addr_ntoa(&ip_info.netmask, actual_mask, sizeof(actual_mask));
+            esp_ip4addr_ntoa(&ip_info.gw,      actual_gw,   sizeof(actual_gw));
+        }
+        esp_netif_dns_info_t dns_info;
+        if (esp_netif_get_dns_info(netif, ESP_NETIF_DNS_MAIN, &dns_info) == ESP_OK)
+            esp_ip4addr_ntoa(&dns_info.ip.u_addr.ip4, actual_dns1, sizeof(actual_dns1));
+        break;
+    }
+    cJSON_AddStringToObject(obj, "actual_ip",      actual_ip);
+    cJSON_AddStringToObject(obj, "actual_mask",    actual_mask);
+    cJSON_AddStringToObject(obj, "actual_gateway", actual_gw);
+    cJSON_AddStringToObject(obj, "actual_dns1",    actual_dns1);
+
     send_json(req, obj);
     return ESP_OK;
 }
@@ -1643,6 +1829,23 @@ static esp_err_t read_multipart_content(httpd_req_t *req, char **out)
 
     free(body);
     *out = result;
+    return ESP_OK;
+}
+
+static esp_err_t read_body_large(httpd_req_t *req, char **out)
+{
+    size_t len = req->content_len;
+    if (len == 0 || len > UPLOAD_MAX_LEN) return ESP_FAIL;
+    char *buf = (char *)malloc(len + 1);
+    if (!buf) return ESP_ERR_NO_MEM;
+    size_t received = 0;
+    while (received < len) {
+        int n = httpd_req_recv(req, buf + received, len - received);
+        if (n <= 0) { free(buf); return ESP_FAIL; }
+        received += (size_t)n;
+    }
+    buf[received] = '\0';
+    *out = buf;
     return ESP_OK;
 }
 
@@ -1755,6 +1958,7 @@ static bool json_to_stored_device(cJSON *item, std::string &deviceID, Helpers::S
 
 static esp_err_t api_download_devices(httpd_req_t *req)
 {
+    if (!ota_check_key(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
     std::map<std::string, Helpers::StoredIoDevice> storedDevices;
     Helpers::DeviceStorage::LoadAllIoDevices(storedDevices);
 
@@ -1771,6 +1975,7 @@ static esp_err_t api_download_devices(httpd_req_t *req)
 
 static esp_err_t api_download_remotes(httpd_req_t *req)
 {
+    if (!ota_check_key(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
     std::map<std::string, Helpers::StoredIoDevice> storedDevices;
     Helpers::DeviceStorage::LoadAllIoDevices(storedDevices);
 
@@ -1792,6 +1997,7 @@ static esp_err_t api_download_remotes(httpd_req_t *req)
 
 static esp_err_t api_upload_devices(httpd_req_t *req)
 {
+    if (!ota_check_key(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
     char *content = nullptr;
     if (read_multipart_content(req, &content) != ESP_OK) {
         send_result(req, false, "Failed to read upload (too large or bad format?)");
@@ -1808,12 +2014,14 @@ static esp_err_t api_upload_devices(httpd_req_t *req)
 
     int count = 0;
     cJSON *item = nullptr;
+    std::map<std::string, Helpers::StoredIoDevice> allDevices;
+    Helpers::DeviceStorage::LoadAllIoDevices(allDevices);
     cJSON_ArrayForEach(item, arr) {
         std::string deviceID;
         Helpers::StoredIoDevice sd = {};
         if (!json_to_stored_device(item, deviceID, sd)) continue;
 
-        Helpers::DeviceStorage::SaveIoDevice(deviceID, sd);
+        allDevices[deviceID] = sd;
         if (s_manager->mIoHome) {
             s_manager->mIoHome->RestoreDevice(deviceID, sd.device);
             for (const std::string &remoteID : sd.linked_remotes)
@@ -1829,6 +2037,7 @@ static esp_err_t api_upload_devices(httpd_req_t *req)
         count++;
     }
     cJSON_Delete(arr);
+    Helpers::DeviceStorage::SaveAllIoDevices(allDevices);
 
     char msg[64];
     snprintf(msg, sizeof(msg), "Restored %d device(s). Reboot to fully apply.", count);
@@ -1840,6 +2049,7 @@ static esp_err_t api_upload_devices(httpd_req_t *req)
 
 static esp_err_t api_upload_remotes(httpd_req_t *req)
 {
+    if (!ota_check_key(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
     char *content = nullptr;
     if (read_multipart_content(req, &content) != ESP_OK) {
         send_result(req, false, "Failed to read upload (too large or bad format?)");
@@ -1874,6 +2084,562 @@ static esp_err_t api_upload_remotes(httpd_req_t *req)
     return ESP_OK;
 }
 
+// ─── GET /api/backup ────────────────────────────────────────────────────────
+
+static esp_err_t api_backup_get(httpd_req_t *req)
+{
+    if (!ota_check_key(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "format", "io-rts-backup");
+    cJSON_AddNumberToObject(root, "format_version", 1);
+
+    time_t now = 0;
+    time(&now);
+    struct tm tm_info = {};
+    gmtime_r(&now, &tm_info);
+    char ts[32];
+    strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", &tm_info);
+    cJSON_AddStringToObject(root, "created", ts);
+
+    const esp_app_desc_t *desc = esp_app_get_description();
+    cJSON_AddStringToObject(root, "firmware_version", desc->version);
+
+    std::map<std::string, Helpers::StoredIoDevice> storedDevices;
+    Helpers::DeviceStorage::LoadAllIoDevices(storedDevices);
+    cJSON *devArr = cJSON_CreateArray();
+    for (const auto &[deviceID, sd] : storedDevices)
+        cJSON_AddItemToArray(devArr, stored_device_to_json(deviceID, sd));
+    cJSON_AddItemToObject(root, "devices", devArr);
+
+    cJSON *creds = cJSON_CreateObject();
+    cJSON_AddStringToObject(creds, "_note", "WiFi password excluded (not accessible to app layer)");
+    cJSON_AddStringToObject(creds, "ota_key", s_ota_key);
+    cJSON_AddStringToObject(creds, "io_system_key", Config::IoHomeConfig::GetIoSystemKey().c_str());
+    cJSON_AddStringToObject(creds, "mqtt_password", Config::MqttConfig::GetClientPassword().c_str());
+    cJSON_AddItemToObject(root, "credentials", creds);
+
+    cJSON *settings = cJSON_CreateObject();
+
+    cJSON *mqtt = cJSON_CreateObject();
+    cJSON_AddBoolToObject(mqtt, "enabled", Config::MqttConfig::isEnabled());
+    cJSON_AddStringToObject(mqtt, "broker", Config::MqttConfig::GetBrokerAddress().c_str());
+    cJSON_AddNumberToObject(mqtt, "port", Config::MqttConfig::GetBrokerPort());
+    cJSON_AddStringToObject(mqtt, "client_id", Config::MqttConfig::GetClientId().c_str());
+    cJSON_AddStringToObject(mqtt, "username", Config::MqttConfig::GetClientUsername().c_str());
+    cJSON_AddBoolToObject(mqtt, "tls", Config::MqttConfig::isTLSEnabled());
+    cJSON_AddStringToObject(mqtt, "topic_prefix", Config::MqttConfig::GetTopicPrefix().c_str());
+    cJSON_AddStringToObject(mqtt, "discovery_prefix", Config::MqttConfig::GetDiscoveryPrefix().c_str());
+    cJSON_AddItemToObject(settings, "mqtt", mqtt);
+
+    cJSON *syslog_cfg = cJSON_CreateObject();
+    cJSON_AddBoolToObject(syslog_cfg, "enabled", Config::SyslogConfig::isEnabled());
+    cJSON_AddStringToObject(syslog_cfg, "server", Config::SyslogConfig::GetServer().c_str());
+    cJSON_AddNumberToObject(syslog_cfg, "port", Config::SyslogConfig::GetPort());
+    cJSON_AddNumberToObject(syslog_cfg, "facility", Config::SyslogConfig::GetFacility());
+    cJSON_AddNumberToObject(syslog_cfg, "min_level", Config::SyslogConfig::GetMinLevel());
+    cJSON_AddItemToObject(settings, "syslog", syslog_cfg);
+
+    cJSON *network = cJSON_CreateObject();
+    cJSON_AddStringToObject(network, "hostname", Config::NetworkConfig::GetHostname().c_str());
+    cJSON_AddBoolToObject(network, "dhcp", Config::NetworkConfig::isDHCP());
+    cJSON_AddStringToObject(network, "ip", Config::NetworkConfig::GetIpAddress().c_str());
+    cJSON_AddStringToObject(network, "mask", Config::NetworkConfig::GetNetworkMask().c_str());
+    cJSON_AddStringToObject(network, "gateway", Config::NetworkConfig::GetGatewayAddress().c_str());
+    cJSON_AddStringToObject(network, "dns", Config::NetworkConfig::GetMainDNSAddress().c_str());
+    cJSON_AddStringToObject(network, "sntp", Config::NetworkConfig::GetSNTPAddress().c_str());
+    cJSON_AddItemToObject(settings, "network", network);
+
+    cJSON *io_cfg = cJSON_CreateObject();
+    cJSON_AddStringToObject(io_cfg, "node_id", Config::IoHomeConfig::GetIoNodeId().c_str());
+    cJSON_AddNumberToObject(io_cfg, "tx_power", Config::IoHomeConfig::GetTxPower());
+    cJSON_AddBoolToObject(io_cfg, "passive_mode", Config::IoHomeConfig::isPassiveModeEnabled());
+    cJSON_AddItemToObject(settings, "io", io_cfg);
+
+    cJSON_AddItemToObject(root, "settings", settings);
+
+    char *str = cJSON_Print(root);
+    cJSON_Delete(root);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=\"io-rts-backup.json\"");
+    httpd_resp_sendstr(req, str ? str : "{}");
+    free(str);
+    return ESP_OK;
+}
+
+// ─── POST /api/restore ──────────────────────────────────────────────────────
+
+static esp_err_t api_restore_post(httpd_req_t *req)
+{
+    if (!ota_check_key(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
+
+    char *body = nullptr;
+    if (read_body_large(req, &body) != ESP_OK) {
+        send_result(req, false, "Failed to read body (too large or bad format)");
+        return ESP_OK;
+    }
+
+    cJSON *root = cJSON_Parse(body);
+    free(body);
+    if (!root) { send_result(req, false, "Invalid JSON"); return ESP_OK; }
+
+    cJSON *fmtItem = cJSON_GetObjectItem(root, "format");
+    if (!cJSON_IsString(fmtItem) || strcmp(fmtItem->valuestring, "io-rts-backup") != 0) {
+        cJSON_Delete(root);
+        send_result(req, false, "Not an io-rts-backup file");
+        return ESP_OK;
+    }
+
+    int deviceCount = 0;
+    cJSON *devArr = cJSON_GetObjectItem(root, "devices");
+    if (cJSON_IsArray(devArr)) {
+        std::map<std::string, Helpers::StoredIoDevice> allDevices;
+        Helpers::DeviceStorage::LoadAllIoDevices(allDevices);
+        cJSON *item = nullptr;
+        cJSON_ArrayForEach(item, devArr) {
+            std::string deviceID;
+            Helpers::StoredIoDevice sd = {};
+            if (!json_to_stored_device(item, deviceID, sd)) continue;
+            allDevices[deviceID] = sd;
+            if (s_manager->mIoHome) {
+                s_manager->mIoHome->RestoreDevice(deviceID, sd.device);
+                for (const std::string &remoteID : sd.linked_remotes)
+                    s_manager->mIoHome->LinkRemoteToDevice(remoteID, deviceID);
+            }
+            s_manager->mIoDevicesMutex.lock();
+            auto it = s_manager->mIoDevices.find(deviceID);
+            if (it != s_manager->mIoDevices.end()) it->second = sd.device;
+            else s_manager->mIoDevices.insert({deviceID, sd.device});
+            s_manager->mIoDevicesMutex.unlock();
+            deviceCount++;
+        }
+        Helpers::DeviceStorage::SaveAllIoDevices(allDevices);
+    }
+
+    cJSON *creds = cJSON_GetObjectItem(root, "credentials");
+    if (cJSON_IsObject(creds)) {
+        cJSON *otaKey = cJSON_GetObjectItem(creds, "ota_key");
+        if (cJSON_IsString(otaKey) && strlen(otaKey->valuestring) > 0) {
+            nvs_handle_t h;
+            if (nvs_open("ota", NVS_READWRITE, &h) == ESP_OK) {
+                nvs_set_str(h, "api_key", otaKey->valuestring);
+                nvs_commit(h);
+                nvs_close(h);
+                strncpy(s_ota_key, otaKey->valuestring, OTA_KEY_LEN);
+                s_ota_key[OTA_KEY_LEN] = '\0';
+            }
+        }
+        cJSON *ioKey = cJSON_GetObjectItem(creds, "io_system_key");
+        if (cJSON_IsString(ioKey) && strlen(ioKey->valuestring) == 32)
+            Config::IoHomeConfig::SetIoSystemKey(ioKey->valuestring);
+        cJSON *mqttPw = cJSON_GetObjectItem(creds, "mqtt_password");
+        if (cJSON_IsString(mqttPw))
+            Config::MqttConfig::SetClientPassword(mqttPw->valuestring);
+    }
+
+    cJSON *settings = cJSON_GetObjectItem(root, "settings");
+    if (cJSON_IsObject(settings)) {
+        cJSON *mqtt = cJSON_GetObjectItem(settings, "mqtt");
+        if (cJSON_IsObject(mqtt)) {
+            cJSON *v;
+            v = cJSON_GetObjectItem(mqtt, "enabled");           if (cJSON_IsBool(v)) Config::MqttConfig::Activate(cJSON_IsTrue(v));
+            v = cJSON_GetObjectItem(mqtt, "broker");            if (cJSON_IsString(v)) Config::MqttConfig::SetBrokerAddress(v->valuestring);
+            v = cJSON_GetObjectItem(mqtt, "port");              if (cJSON_IsNumber(v)) Config::MqttConfig::SetBrokerPort((uint16_t)v->valuedouble);
+            v = cJSON_GetObjectItem(mqtt, "client_id");         if (cJSON_IsString(v)) Config::MqttConfig::SetClientId(v->valuestring);
+            v = cJSON_GetObjectItem(mqtt, "username");          if (cJSON_IsString(v)) Config::MqttConfig::SetClientUsername(v->valuestring);
+            v = cJSON_GetObjectItem(mqtt, "tls");               if (cJSON_IsBool(v)) Config::MqttConfig::EnableTLS(cJSON_IsTrue(v));
+            v = cJSON_GetObjectItem(mqtt, "topic_prefix");      if (cJSON_IsString(v)) Config::MqttConfig::SetTopicPrefix(v->valuestring);
+            v = cJSON_GetObjectItem(mqtt, "discovery_prefix");  if (cJSON_IsString(v)) Config::MqttConfig::SetDiscoveryPrefix(v->valuestring);
+        }
+        cJSON *syslog_r = cJSON_GetObjectItem(settings, "syslog");
+        if (cJSON_IsObject(syslog_r)) {
+            cJSON *v;
+            v = cJSON_GetObjectItem(syslog_r, "enabled");    if (cJSON_IsBool(v)) Config::SyslogConfig::SetEnabled(cJSON_IsTrue(v));
+            v = cJSON_GetObjectItem(syslog_r, "server");     if (cJSON_IsString(v)) Config::SyslogConfig::SetServer(v->valuestring);
+            v = cJSON_GetObjectItem(syslog_r, "port");       if (cJSON_IsNumber(v)) Config::SyslogConfig::SetPort((uint16_t)v->valuedouble);
+            v = cJSON_GetObjectItem(syslog_r, "facility");   if (cJSON_IsNumber(v)) Config::SyslogConfig::SetFacility((uint8_t)v->valuedouble);
+            v = cJSON_GetObjectItem(syslog_r, "min_level");  if (cJSON_IsNumber(v)) Config::SyslogConfig::SetMinLevel((uint8_t)v->valuedouble);
+        }
+        cJSON *net = cJSON_GetObjectItem(settings, "network");
+        if (cJSON_IsObject(net)) {
+            cJSON *v;
+            v = cJSON_GetObjectItem(net, "hostname");  if (cJSON_IsString(v)) Config::NetworkConfig::SetHostname(v->valuestring);
+            v = cJSON_GetObjectItem(net, "dhcp");      if (cJSON_IsBool(v)) Config::NetworkConfig::SetDHCP(cJSON_IsTrue(v));
+            v = cJSON_GetObjectItem(net, "ip");        if (cJSON_IsString(v)) Config::NetworkConfig::SetIpAddress(v->valuestring);
+            v = cJSON_GetObjectItem(net, "mask");      if (cJSON_IsString(v)) Config::NetworkConfig::SetNetworkMask(v->valuestring);
+            v = cJSON_GetObjectItem(net, "gateway");   if (cJSON_IsString(v)) Config::NetworkConfig::SetGatewayAddress(v->valuestring);
+            v = cJSON_GetObjectItem(net, "dns");       if (cJSON_IsString(v)) Config::NetworkConfig::SetMainDNSAddress(v->valuestring);
+            v = cJSON_GetObjectItem(net, "sntp");      if (cJSON_IsString(v)) Config::NetworkConfig::SetSNTPAddress(v->valuestring);
+        }
+        cJSON *io_r = cJSON_GetObjectItem(settings, "io");
+        if (cJSON_IsObject(io_r)) {
+            cJSON *v;
+            v = cJSON_GetObjectItem(io_r, "node_id");      if (cJSON_IsString(v)) Config::IoHomeConfig::SetIoNodeId(v->valuestring);
+            v = cJSON_GetObjectItem(io_r, "tx_power");     if (cJSON_IsNumber(v)) Config::IoHomeConfig::SetTxPower((uint8_t)v->valuedouble);
+            v = cJSON_GetObjectItem(io_r, "passive_mode"); if (cJSON_IsBool(v)) Config::IoHomeConfig::ActivatePassiveMode(cJSON_IsTrue(v));
+        }
+    }
+
+    cJSON_Delete(root);
+    char msg[64];
+    snprintf(msg, sizeof(msg), "Restored %d device(s). Reboot to fully apply.", deviceCount);
+    send_result(req, true, msg);
+    return ESP_OK;
+}
+
+// ─── POST /api/factory-reset ─────────────────────────────────────────────────
+
+static esp_err_t api_factory_reset_post(httpd_req_t *req)
+{
+    if (!ota_check_key(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
+
+    const char *namespaces[] = { "mqtt", "syslog", "ota", "network", "iohc", "misc" };
+    for (const auto &ns : namespaces) {
+        nvs_handle_t h;
+        if (nvs_open(ns, NVS_READWRITE, &h) == ESP_OK) {
+            nvs_erase_all(h);
+            nvs_commit(h);
+            nvs_close(h);
+        }
+    }
+
+    DIR *dir = opendir("/devices");
+    if (dir) {
+        struct dirent *entry;
+        while ((entry = readdir(dir)) != nullptr) {
+            if (entry->d_name[0] == '.') continue;
+            char path[280];
+            snprintf(path, sizeof(path), "/devices/%s", entry->d_name);
+            remove(path);
+        }
+        closedir(dir);
+    }
+
+    send_result(req, true, "Factory reset complete. Rebooting.");
+    esp_timer_handle_t t;
+    esp_timer_create_args_t ta = {};
+    ta.callback = [](void *){ esp_restart(); };
+    ta.name = "web_factory_reset";
+    if (esp_timer_create(&ta, &t) == ESP_OK)
+        esp_timer_start_once(t, 500 * 1000);
+    else
+        esp_restart();
+    return ESP_OK;
+}
+
+// ─── /api/somfy/credentials ──────────────────────────────────────────────────
+
+static esp_err_t api_somfy_credentials_get(httpd_req_t *req)
+{
+    char email[96] = {};
+    nvs_handle_t h;
+    if (nvs_open("somfy", NVS_READONLY, &h) == ESP_OK) {
+        size_t len = sizeof(email);
+        nvs_get_str(h, "email", email, &len);
+        nvs_close(h);
+    }
+    cJSON *obj = cJSON_CreateObject();
+    cJSON_AddBoolToObject(obj, "configured", email[0] != '\0');
+    cJSON_AddStringToObject(obj, "email", email);
+    send_json(req, obj);
+    return ESP_OK;
+}
+
+static esp_err_t api_somfy_credentials_post(httpd_req_t *req)
+{
+    if (!ota_check_key(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
+    char *body = nullptr;
+    if (read_body(req, &body) != ESP_OK) { send_result(req, false, "Failed to read body"); return ESP_OK; }
+    cJSON *json = cJSON_Parse(body);
+    free(body);
+    if (!json) { send_result(req, false, "Invalid JSON"); return ESP_OK; }
+
+    cJSON *jEmail = cJSON_GetObjectItem(json, "email");
+    cJSON *jPass  = cJSON_GetObjectItem(json, "password");
+    if (!cJSON_IsString(jEmail) || !cJSON_IsString(jPass) ||
+        !jEmail->valuestring[0] || !jPass->valuestring[0]) {
+        cJSON_Delete(json);
+        send_result(req, false, "Missing email or password");
+        return ESP_OK;
+    }
+    nvs_handle_t h;
+    if (nvs_open("somfy", NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_str(h, "email",    jEmail->valuestring);
+        nvs_set_str(h, "password", jPass->valuestring);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+    cJSON_Delete(json);
+    send_result(req, true, "Credentials saved");
+    return ESP_OK;
+}
+
+// ─── Overkiz cloud API helpers ───────────────────────────────────────────────
+
+static std::string overkiz_url_encode(const std::string &s)
+{
+    std::string r;
+    for (unsigned char c : s) {
+        if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~')
+            r += c;
+        else {
+            char enc[4];
+            snprintf(enc, sizeof(enc), "%%%02X", c);
+            r += enc;
+        }
+    }
+    return r;
+}
+
+static std::string overkiz_login(const std::string &email, const std::string &password)
+{
+    std::string post_body = "userId=" + overkiz_url_encode(email) +
+                            "&userPassword=" + overkiz_url_encode(password);
+    std::string session_cookie;
+
+    esp_http_client_config_t cfg = {};
+    cfg.url            = "https://ha101-1.overkiz.com/enduser-mobile-web/enduserAPI/login";
+    cfg.method         = HTTP_METHOD_POST;
+    cfg.crt_bundle_attach = esp_crt_bundle_attach;
+    cfg.timeout_ms     = 15000;
+    cfg.user_data      = &session_cookie;
+    cfg.event_handler  = [](esp_http_client_event_t *evt) {
+        if (evt->event_id == HTTP_EVENT_ON_HEADER && strcasecmp(evt->header_key, "Set-Cookie") == 0) {
+            const char *p = strstr(evt->header_value, "JSESSIONID=");
+            if (p) {
+                p += 11;
+                const char *end = strchr(p, ';');
+                auto *session_cookie = static_cast<std::string *>(evt->user_data);
+                *session_cookie = end ? std::string(p, end - p) : std::string(p);
+            }
+        }
+        return ESP_OK;
+    };
+
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (!client) return "";
+    esp_http_client_set_header(client, "Content-Type", "application/x-www-form-urlencoded");
+    esp_http_client_set_post_field(client, post_body.c_str(), (int)post_body.size());
+    esp_err_t err = esp_http_client_perform(client);
+    int status    = esp_http_client_get_status_code(client);
+    esp_http_client_cleanup(client);
+
+    if (err != ESP_OK || status != 200) {
+        ESP_LOGW(TAG, "overkiz_login: err=%s status=%d", esp_err_to_name(err), status);
+        return "";
+    }
+    return session_cookie;
+}
+
+#define OVERKIZ_BUFFER_LENGTH 1024
+static esp_err_t overkiz_get(const std::string &cookie, const std::string &path, const std::function<esp_err_t(const char*, const int)> onreceive)
+{
+    std::string url = "https://ha101-1.overkiz.com/enduser-mobile-web/enduserAPI/" + path;
+    std::string cookie_hdr = "JSESSIONID=" + cookie;
+    esp_http_client_config_t cfg = {};
+    cfg.url               = url.c_str();
+    cfg.method            = HTTP_METHOD_GET;
+    cfg.crt_bundle_attach = esp_crt_bundle_attach;
+    cfg.timeout_ms        = 15000;
+
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (!client) return ESP_FAIL;
+    esp_http_client_set_header(client, "Cookie", cookie_hdr.c_str());
+    esp_err_t err = esp_http_client_open(client, 0);
+    if (err == ESP_OK && esp_http_client_fetch_headers(client) < 0)
+        err = ESP_FAIL;
+    int status = esp_http_client_get_status_code(client);
+    if (err == ESP_OK && status == 200) {
+        char buffer[OVERKIZ_BUFFER_LENGTH];
+        while (true) {
+            int num_bytes = esp_http_client_read(client, buffer, OVERKIZ_BUFFER_LENGTH - 1);
+            if (num_bytes == ESP_ERR_HTTP_EAGAIN) continue;
+            if (num_bytes < 0) {
+                ESP_LOGE(TAG, "overkiz_get: Error reading data");
+                err = ESP_FAIL;
+                break;
+            }
+            if (num_bytes == 0) break;
+            buffer[num_bytes] = 0;
+            if (onreceive(buffer, num_bytes) != ESP_OK) { err = ESP_FAIL; break; }
+        }
+    }
+
+    esp_http_client_close(client);
+    esp_http_client_cleanup(client);
+    if (err != ESP_OK || status != 200) {
+        ESP_LOGW(TAG, "overkiz_get %s: err=%s status=%d", path.c_str(), esp_err_to_name(err), status);
+        return err != ESP_OK ? err : ESP_FAIL;
+    }
+    return ESP_OK;
+}
+
+static esp_err_t overkiz_get_devices(const std::string &cookie, const std::function<void(std::string, std::string)> handle_device)
+{
+    const JsonPath devicePath = JsonDoc.withArray().withObject();
+    const JsonPath deviceDefinitionPath = devicePath.withObject("definition");
+    
+    std::string deviceLabel = "";
+    std::string deviceURL = "";
+    std::string deviceType = "";
+    JsonPathEventCB_t jsonParserHandler = [&](JsonPathEvent evt) {
+        switch(evt.type) {
+            case EVENT_VALUE:
+                if (evt.path == devicePath) {
+                    if (evt.key == "label" && evt.value->isString()) deviceLabel = evt.value->getString();
+                    else if (evt.key == "deviceURL" && evt.value->isString()) deviceURL = evt.value->getString();
+                }
+                if (evt.path == deviceDefinitionPath && evt.key == "type" && evt.value->isString()) {
+                    deviceType = evt.value->getString();
+                }
+                break;
+            case EVENT_END_OBJECT:
+                if (evt.path == devicePath) {
+                    if (deviceType == "ACTUATOR") {
+                        // Only for devices with type ACTUATOR we want to get the devices, this will exclude things like the Tahoma/ConnectivityKit box
+                        handle_device(deviceLabel, deviceURL);
+                    } else {
+                        ESP_LOGI(TAG, "overkiz_get_devices: device '%s' with url '%s', denied because type is '%s' instead of 'ACTUATOR'", deviceLabel.c_str(), deviceURL.c_str(), deviceType.c_str());
+                    }
+                    deviceLabel = deviceURL = deviceType = "";
+                }
+                break;
+        }
+    };
+    
+    JsonStreamingParser jparser(JsonPathHandler(jsonParserHandler));
+
+    return overkiz_get(cookie, "setup/devices", [&jparser](const char* buffer, const int len) {
+        // feed to parser
+        for (int i=0; i<len; i++) {
+            jparser.parse(buffer[i]);
+
+            if (jparser.hasParseError()) {
+                ESP_LOGE(TAG, "overkiz_get_devices: Error during parsing: %s", jparser.getErrorMessage());
+                return ESP_FAIL;
+            }
+        }
+        return ESP_OK;
+    });
+}
+
+// POST /api/somfy/import
+static esp_err_t api_somfy_import_post(httpd_req_t *req)
+{
+    if (!ota_check_key(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
+
+    char email[96] = {}, password[96] = {};
+    nvs_handle_t nh;
+    if (nvs_open("somfy", NVS_READONLY, &nh) == ESP_OK) {
+        size_t el = sizeof(email), pl = sizeof(password);
+        nvs_get_str(nh, "email",    email,    &el);
+        nvs_get_str(nh, "password", password, &pl);
+        nvs_close(nh);
+    }
+    if (email[0] == '\0' || password[0] == '\0') {
+        send_result(req, false, "No Somfy credentials configured");
+        return ESP_OK;
+    }
+
+    std::string cookie = overkiz_login(std::string(email), std::string(password));
+    if (cookie.empty()) {
+        send_result(req, false, "Login failed — check email and password");
+        return ESP_OK;
+    }
+
+    std::map<std::string, bool> known;
+    s_manager->mIoDevicesMutex.lock();
+    for (const auto &kv : s_manager->mIoDevices) known[kv.first] = true;
+    s_manager->mIoDevicesMutex.unlock();
+
+    cJSON *result = cJSON_CreateArray();
+    auto err = overkiz_get_devices(cookie, [&result, &known](std::string label, std::string url) {
+        if (url.compare(0, 5, "io://") != 0) { 
+            ESP_LOGI(TAG, "overkiz_get_devices: device '%s' with url denied: '%s'", label.c_str(), url.c_str()); 
+            return; 
+        }
+
+        auto lastSlash = url.find_last_of('/');
+        auto lastPart = url.substr(lastSlash+1);
+        if (lastPart == "") { ESP_LOGI(TAG, "overkiz_get_devices: device '%s' with url denied: '%s'", label.c_str(), url.c_str()); return; }
+
+        char *end = nullptr;
+        unsigned long decimal_id = strtoul(lastPart.c_str(), &end, 10);
+        if (*end != '\0' || decimal_id == 0 || decimal_id > 0xFFFFFF ) { 
+            ESP_LOGI(TAG, "overkiz_get_devices: device '%s' with url '%s' denied because of invalid decimal value", label.c_str(), url.c_str()); 
+            return; 
+        }
+
+        char hex_id[7];
+        snprintf(hex_id, sizeof(hex_id), "%06lX", decimal_id);
+
+        cJSON *entry = cJSON_CreateObject();
+        cJSON_AddStringToObject(entry, "id",   hex_id);
+        cJSON_AddStringToObject(entry, "name", label.empty() ? hex_id : label.c_str());
+        cJSON_AddBoolToObject(entry,  "already_added", known.count(hex_id) > 0);
+        cJSON_AddItemToArray(result, entry);
+    });
+
+    if (err != ESP_OK) {
+        cJSON_Delete(result);
+        send_result(req, false, "Failed to fetch devices from Overkiz");
+        return ESP_OK;
+    }
+
+    send_json(req, result);
+    return ESP_OK;
+}
+
+// POST /api/somfy/add   [{id, name}, ...]
+static esp_err_t api_somfy_add_post(httpd_req_t *req)
+{
+    if (!ota_check_key(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
+    char *body = nullptr;
+    if (read_body(req, &body) != ESP_OK) { send_result(req, false, "Failed to read body"); return ESP_OK; }
+    cJSON *arr = cJSON_Parse(body);
+    free(body);
+    if (!cJSON_IsArray(arr)) { cJSON_Delete(arr); send_result(req, false, "Expected JSON array"); return ESP_OK; }
+
+    std::map<std::string, Helpers::StoredIoDevice> allDevices;
+    Helpers::DeviceStorage::LoadAllIoDevices(allDevices);
+
+    int count = 0;
+    cJSON *item = nullptr;
+    cJSON_ArrayForEach(item, arr) {
+        cJSON *jId   = cJSON_GetObjectItem(item, "id");
+        cJSON *jName = cJSON_GetObjectItem(item, "name");
+        if (!cJSON_IsString(jId)) continue;
+
+        cJSON *syn = cJSON_CreateObject();
+        cJSON_AddStringToObject(syn, "id", jId->valuestring);
+        if (cJSON_IsString(jName))
+            cJSON_AddStringToObject(syn, "name", jName->valuestring);
+
+        std::string deviceID;
+        Helpers::StoredIoDevice sd = {};
+        if (!json_to_stored_device(syn, deviceID, sd)) { cJSON_Delete(syn); continue; }
+        cJSON_Delete(syn);
+
+        allDevices[deviceID] = sd;
+        if (s_manager->mIoHome)
+            s_manager->mIoHome->RestoreDevice(deviceID, sd.device);
+
+        s_manager->mIoDevicesMutex.lock();
+        auto it = s_manager->mIoDevices.find(deviceID);
+        if (it != s_manager->mIoDevices.end()) it->second = sd.device;
+        else s_manager->mIoDevices.insert({deviceID, sd.device});
+        s_manager->mIoDevicesMutex.unlock();
+        count++;
+    }
+    cJSON_Delete(arr);
+    Helpers::DeviceStorage::SaveAllIoDevices(allDevices);
+
+    char msg[64];
+    snprintf(msg, sizeof(msg), "Added %d device(s). Reboot to fully apply.", count);
+    send_result(req, true, msg);
+    return ESP_OK;
+}
+
 // ─── GET /api/info ──────────────────────────────────────────────────────────
 
 static esp_err_t api_info_get(httpd_req_t *req)
@@ -1885,6 +2651,7 @@ static esp_err_t api_info_get(httpd_req_t *req)
     cJSON_AddStringToObject(obj, "compile_date", desc->date);
     cJSON_AddStringToObject(obj, "compile_time", desc->time);
     cJSON_AddStringToObject(obj, "idf_ver",      desc->idf_ver);
+    cJSON_AddStringToObject(obj, "board",        CONFIG_BOARD_NAME);
 
     FILE *vf = fopen(WEB_BASE_PATH "/version.json", "r");
     if (vf) {
@@ -1991,13 +2758,14 @@ static void pairing_task(void *)
         return;
     }
     const int MAX_ATTEMPTS = 60; // 60 × ~2 s = ~120 s window
-    bool ok = false;
+    iohome::PairResult result = iohome::PairResult::FAILED_NO_RESPONSE;
     int heartbeat_counter = 0;
     for (int attempt = 0; attempt < MAX_ATTEMPTS && s_pairing_active; attempt++)
     {
-        ok = s_manager->mIoHome->DiscoverAndPairDevice();
-        if (ok) break;
-        // Broadcast remaining time every ~5 attempts (~10 s)
+        result = s_manager->mIoHome->DiscoverAndPairDevice();
+        if (result == iohome::PairResult::PAIRED_FULL || result == iohome::PairResult::PAIRED_SHORTCUT_VERIFIED) break;
+        if (result == iohome::PairResult::FAILED_KEY_MISMATCH) break; // definitive — don't retry
+        // FAILED_NO_RESPONSE: keep scanning, broadcast remaining time every ~5 attempts (~10 s)
         if (++heartbeat_counter >= 5) {
             heartbeat_counter = 0;
             int remaining_s = (MAX_ATTEMPTS - attempt - 1) * 2;
@@ -2007,9 +2775,13 @@ static void pairing_task(void *)
         }
     }
     s_pairing_active = false;
-    if (!ok) {
+    if (result == iohome::PairResult::FAILED_KEY_MISMATCH) {
+        ESP_LOGW(TAG, "Pairing failed: device has a different system key");
+        web_server_broadcast_message("{\"type\":\"pair_failed\",\"status\":\"key_mismatch\","
+            "\"message\":\"Device found but has a different system key. Factory reset the device and try again.\"}");
+    } else if (result != iohome::PairResult::PAIRED_FULL && result != iohome::PairResult::PAIRED_SHORTCUT_VERIFIED) {
         ESP_LOGW(TAG, "Pairing timed out after 120 s");
-        web_server_broadcast_message("{\"type\":\"pair_failed\"}");
+        web_server_broadcast_message("{\"type\":\"pair_failed\",\"status\":\"timeout\"}");
     }
     // On success device_added is broadcast from deviceStatusCallback
     vTaskDelete(nullptr);
@@ -2017,6 +2789,7 @@ static void pairing_task(void *)
 
 static esp_err_t api_pair_start_post(httpd_req_t *req)
 {
+    if (!ota_check_key(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
     if (s_pairing_active) {
         httpd_resp_set_type(req, "application/json");
         httpd_resp_sendstr(req, "{\"status\":\"busy\"}");
@@ -2064,9 +2837,16 @@ static void learn_task(void *)
 
 static esp_err_t api_learn_start_post(httpd_req_t *req)
 {
+    if (!ota_check_key(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
     if (s_learn_active) {
         httpd_resp_set_type(req, "application/json");
         httpd_resp_sendstr(req, "{\"status\":\"busy\"}");
+        return ESP_OK;
+    }
+    if (Config::IoHomeConfig::isPassiveModeEnabled()) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"message\":\"Passive mode is enabled — disable it in Settings first.\"}");
         return ESP_OK;
     }
     s_learn_active = true;
@@ -2078,6 +2858,7 @@ static esp_err_t api_learn_start_post(httpd_req_t *req)
 
 static esp_err_t api_learn_stop_post(httpd_req_t *req)
 {
+    if (!ota_check_key(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
     s_learn_active = false;
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, "{\"status\":\"stopped\"}");
@@ -2119,6 +2900,7 @@ static void pair_device_task(void *)
 
 static esp_err_t api_pair_device_start_post(httpd_req_t *req)
 {
+    if (!ota_check_key(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
     if (s_pair_device_active) {
         httpd_resp_set_type(req, "application/json");
         httpd_resp_sendstr(req, "{\"status\":\"busy\"}");
@@ -2133,6 +2915,7 @@ static esp_err_t api_pair_device_start_post(httpd_req_t *req)
 
 static esp_err_t api_pair_device_stop_post(httpd_req_t *req)
 {
+    if (!ota_check_key(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
     s_pair_device_active = false;
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, "{\"status\":\"stopped\"}");
@@ -2167,6 +2950,7 @@ static void send_key_task(void *)
 
 static esp_err_t api_send_key_start_post(httpd_req_t *req)
 {
+    if (!ota_check_key(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
     if (s_send_key_active) {
         httpd_resp_set_type(req, "application/json");
         httpd_resp_sendstr(req, "{\"status\":\"busy\"}");
@@ -2181,6 +2965,7 @@ static esp_err_t api_send_key_start_post(httpd_req_t *req)
 
 static esp_err_t api_send_key_stop_post(httpd_req_t *req)
 {
+    if (!ota_check_key(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
     s_send_key_active = false;
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, "{\"status\":\"stopped\"}");
@@ -2214,6 +2999,7 @@ static void capture_timeout_task(void *)
 
 static esp_err_t api_capture_start_post(httpd_req_t *req)
 {
+    if (!ota_check_key(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
     s_manager->StartRemoteCapture();
     if (s_capture_timeout_task != nullptr) {
         vTaskDelete(s_capture_timeout_task);
@@ -2227,6 +3013,7 @@ static esp_err_t api_capture_start_post(httpd_req_t *req)
 
 static esp_err_t api_capture_cancel_post(httpd_req_t *req)
 {
+    if (!ota_check_key(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
     if (s_capture_timeout_task != nullptr) {
         vTaskDelete(s_capture_timeout_task);
         s_capture_timeout_task = nullptr;
@@ -2380,7 +3167,7 @@ void web_server_start(void *ioRtsManager)
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.stack_size = 8192;
     config.task_priority = tskIDLE_PRIORITY + 3; // below radio (8), IO processing (6), status updates (4)
-    config.max_uri_handlers = 52;
+    config.max_uri_handlers = 60;
     config.max_open_sockets = 13; // browser opens many parallel connections for static files + WS
     config.send_wait_timeout = 2;  // seconds; cap blocking sends to dead clients
     config.recv_wait_timeout = 2;
@@ -2422,6 +3209,7 @@ void web_server_start(void *ioRtsManager)
     reg("/api/mqtt",              HTTP_POST, api_mqtt_post);
     reg("/api/syslog",            HTTP_GET,  api_syslog_get);
     reg("/api/syslog",            HTTP_POST, api_syslog_post);
+    reg("/api/syslog/ping",       HTTP_POST, api_syslog_ping_post);
     reg("/api/download/devices",  HTTP_GET,  api_download_devices);
     reg("/api/download/remotes",  HTTP_GET,  api_download_remotes);
     reg("/api/upload/devices",    HTTP_POST, api_upload_devices);
@@ -2431,6 +3219,13 @@ void web_server_start(void *ioRtsManager)
     reg("/api/ota/web",           HTTP_POST, api_ota_web_post);
     reg("/api/ota/key",           HTTP_GET,  api_ota_key_get);
     reg("/api/ota/key",           HTTP_POST, api_ota_key_post);
+    reg("/api/backup",            HTTP_GET,  api_backup_get);
+    reg("/api/restore",           HTTP_POST, api_restore_post);
+    reg("/api/factory-reset",     HTTP_POST, api_factory_reset_post);
+    reg("/api/somfy/credentials", HTTP_GET,  api_somfy_credentials_get);
+    reg("/api/somfy/credentials", HTTP_POST, api_somfy_credentials_post);
+    reg("/api/somfy/import",      HTTP_POST, api_somfy_import_post);
+    reg("/api/somfy/add",         HTTP_POST, api_somfy_add_post);
     reg("/api/reboot",            HTTP_POST, api_reboot_post);
     reg("/api/io/key",            HTTP_GET,  api_io_key_get);
     reg("/api/io/key",            HTTP_POST, api_io_key_post);

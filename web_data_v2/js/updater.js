@@ -1,10 +1,10 @@
 (function () {
-    var GITHUB_API = "https://api.github.com/repos/rspaargaren/io-rts-esp32/releases";
-    var STORAGE_CHANNEL = "updateChannel";
-    var STORAGE_DISMISSED = "updateDismissed";
+    var GA = "https://api.github.com/repos/rspaargaren/io-rts-esp32/releases";
+    var SC = "updateChannel";
+    var SD = "updateDismissed";
 
     function getChannel() {
-        return localStorage.getItem(STORAGE_CHANNEL) || "stable";
+        return localStorage.getItem(SC) || "stable";
     }
 
     function parseVersion(tag) {
@@ -23,17 +23,15 @@
         return false;
     }
 
-    function findAssetUrl(release, suffix) {
+    function findAssetUrl(release, name) {
         var assets = release.assets || [];
         for (var i = 0; i < assets.length; i++) {
-            if (assets[i].name.indexOf(suffix) !== -1) {
-                return assets[i].browser_download_url;
-            }
+            if (assets[i].name === name) return assets[i].browser_download_url;
         }
         return null;
     }
 
-    function showBanner(release, currentVersion) {
+    function showBanner(release, currentVersion, board) {
         var banner = document.getElementById("update-banner");
         var versionEl = document.getElementById("update-banner-version");
         var linkEl = document.getElementById("update-banner-link");
@@ -48,15 +46,15 @@
         banner.style.display = "";
 
         dismissBtn.onclick = function () {
-            localStorage.setItem(STORAGE_DISMISSED, tag);
+            localStorage.setItem(SD, tag);
             banner.style.display = "none";
         };
 
         startBtn.onclick = function () {
-            var firmwareUrl = findAssetUrl(release, "-firmware.bin");
-            var webUrl = findAssetUrl(release, "-web.bin");
+            var firmwareUrl = findAssetUrl(release, board + "-" + tag + "-firmware.bin");
+            var webUrl      = findAssetUrl(release, board + "-" + tag + "-web.bin");
             if (!firmwareUrl || !webUrl) {
-                alert("Release assets not found. Please update manually.");
+                alert("Release assets not found for board \"" + board + "\". Please update manually.");
                 return;
             }
             runUpdate(firmwareUrl, webUrl, currentVersion);
@@ -124,6 +122,10 @@
         }
 
         otaFromUrl(firmwareUrl, "firmware", otaKey, function (s) { setProgress(s, 25); })
+        .catch(function (err) {
+            if (err instanceof TypeError) { setProgress("Rebooting…", null); return; }
+            throw err;
+        })
         .then(function () {
             setProgress("Waiting for device to come back online…", null);
             return new Promise(function (resolve, reject) {
@@ -160,12 +162,12 @@
         });
     }
 
-    function checkForUpdates(currentVersion) {
+    function checkForUpdates(currentVersion, board) {
         if (!parseVersion(currentVersion)) return;
-        var dismissed = localStorage.getItem(STORAGE_DISMISSED);
+        var dismissed = localStorage.getItem(SD);
         var channel = getChannel();
 
-        fetch(GITHUB_API, { cache: "no-store" })
+        return fetch(GA, { cache: "no-store" })
             .then(function (r) { return r.json(); })
             .then(function (releases) {
                 var candidates = releases.filter(function (r) {
@@ -177,15 +179,16 @@
                 var latest = candidates[0];
                 if (latest.tag_name === dismissed) return;
                 if (isNewer(latest.tag_name, currentVersion)) {
-                    showBanner(latest, currentVersion);
+                    parseInt(latest.tag_name.slice(1))>parseInt(currentVersion.slice(1))?window.showMajorBanner&&window.showMajorBanner(latest,SD):showBanner(latest,currentVersion,board);
+                    return true;
                 }
             })
             .catch(function () {});
     }
 
-    function init(currentVersion) {
-        checkForUpdates(currentVersion);
+    function init(currentVersion, board) {
+        checkForUpdates(currentVersion, board);
     }
 
-    window.MiOpenUpdater = { init: init, getChannel: getChannel };
+    window.MiOpenUpdater = { init: init, getChannel: getChannel, check: checkForUpdates };
 })();

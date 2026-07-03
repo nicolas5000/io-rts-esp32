@@ -1,4 +1,5 @@
-PLEASE TAKE NOTE DUE TO A CHANGE IN PARTITION TABLE THE CURRENT RELEASE (2.1.XX) IS A BREAKING CHANGE IN COMPARISON TO PREVIOUS RELEASES (1.1.XX)!
+> [!CAUTION]
+> Breaking change! Since merge of PR #28 on July 3rd 2026 flash mapping has changed: devices partition is reduced and webserver partition is bigger. The consequence is that all your devices will be lost after upgrade. Please be sure to save your devices information (you can use web UI) before upgrading to last version, then restore your devices information!
 
 # io-rts-esp32
 IO-Homecontrol 2W (2-Way, with device feedback) protocol and legacy RTS protocol implementation on ESP32-S3 hardware based on ESP-IDF SDK version 6.0.0
